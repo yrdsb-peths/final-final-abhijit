@@ -5,6 +5,7 @@ import com.badlogic.gdx.graphics.*;
 import com.badlogic.gdx.graphics.g3d.*;
 import com.badlogic.gdx.graphics.g3d.attributes.*;
 import com.badlogic.gdx.graphics.g3d.environment.*;
+import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.graphics.g3d.loader.G3dModelLoader;
 import com.badlogic.gdx.graphics.g3d.utils.*;
 import com.badlogic.gdx.math.*;
@@ -87,7 +88,7 @@ public class BrawlGame extends ApplicationAdapter {
 
         // Animation controller — matches animation IDs baked in the .g3db
         playerAnim = new AnimationController(player);
-        playerAnim.setAnimation("idle", -1); // -1 = loop forever
+        playerAnim.setAnimation("idle", null); // null listener, loops forever
 
         // Load map ground — expects assets/models/ground.g3db
         Model realGround = loader.loadModel(Gdx.files.internal("models/ground.g3db"));
@@ -159,9 +160,9 @@ public class BrawlGame extends ApplicationAdapter {
         if (playerAnim != null) {
             // Switch idle ↔ walk animation based on movement
             if (isMoving && !wasMoving) {
-                playerAnim.animate("walk", -1, 0.2f);
+                playerAnim.animate("walk", -1, null, 0.2f);
             } else if (!isMoving && wasMoving) {
-                playerAnim.animate("idle", -1, 0.2f);
+                playerAnim.animate("idle", -1, null, 0.2f);
             }
             playerAnim.update(delta);
         }
