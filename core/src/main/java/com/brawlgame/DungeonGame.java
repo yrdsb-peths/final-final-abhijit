@@ -2,6 +2,7 @@ package com.brawlgame;
 
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g3d.Environment;
@@ -10,6 +11,7 @@ import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.brawlgame.entity.Player;
 import com.brawlgame.render.CameraRig;
+import com.brawlgame.render.DebugRenderer;
 import com.brawlgame.render.GridRenderer;
 
 /**
@@ -22,6 +24,8 @@ public class DungeonGame extends ApplicationAdapter {
     private Environment environment;
     private CameraRig cameraRig;
     private GridRenderer grid;
+    private DebugRenderer debug;
+    private boolean showDebug = false; // hidden by default; F3 toggles the hitbox overlay
     private Player player;
     private Texture skin;
 
@@ -38,6 +42,7 @@ public class DungeonGame extends ApplicationAdapter {
 
         cameraRig = new CameraRig();
         grid = new GridRenderer(32, 1f);
+        debug = new DebugRenderer();
 
         skin = new Texture(Gdx.files.internal("textures/player.png"));
         player = new Player(skin);
@@ -47,8 +52,10 @@ public class DungeonGame extends ApplicationAdapter {
     public void render() {
         float delta = Math.min(Gdx.graphics.getDeltaTime(), 1f / 30f);
 
-        player.update(delta);
-        cameraRig.update(delta, player.getPosition());
+        if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) showDebug = !showDebug;
+
+        player.update(delta, cameraRig.camera);
+        cameraRig.update(delta, player.getPosition(), player.isSprinting());
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         Gdx.gl.glClearColor(0.039f, 0.043f, 0.055f, 1f); // near-black void
@@ -58,6 +65,8 @@ public class DungeonGame extends ApplicationAdapter {
         grid.render(modelBatch);
         player.render(modelBatch, environment);
         modelBatch.end();
+
+        if (showDebug) debug.render(cameraRig.camera, player);
     }
 
     @Override
@@ -69,6 +78,7 @@ public class DungeonGame extends ApplicationAdapter {
     public void dispose() {
         modelBatch.dispose();
         grid.dispose();
+        debug.dispose();
         player.dispose();
         skin.dispose();
     }

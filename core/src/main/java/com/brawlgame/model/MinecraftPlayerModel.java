@@ -112,7 +112,19 @@ public final class MinecraftPlayerModel {
         box(mb.part(LEG_L + "Ov", GL20.GL_TRIANGLES, attrs, overlay),
             -2 * PX, -12 * PX, -2 * PX, 4, 12, 4, 0, 48, inf);
 
-        return mb.end();
+        Model model = mb.end();
+
+        // Parent the head and both arms under the BODY node so that a torso lean (sprint / sneak)
+        // carries them along naturally — exactly like the real Minecraft model. The legs stay under
+        // the root so they keep swinging from the hips, unaffected by the torso lean.
+        Node body = model.getNode(BODY);
+        for (String childId : new String[] {HEAD, ARM_R, ARM_L}) {
+            Node child = model.getNode(childId);
+            model.nodes.removeValue(child, true);
+            child.translation.sub(0f, 12f * PX, 0f); // re-express the pivot relative to the body pivot
+            body.addChild(child);
+        }
+        return model;
     }
 
     /** Start a new rigged node whose origin (pivot) is at (x,y,z) in player space. */
