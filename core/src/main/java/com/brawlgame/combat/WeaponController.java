@@ -54,6 +54,13 @@ public final class WeaponController implements Disposable {
 
     // ---- sword arm arc (degrees) ----
     private static final float ARM_PITCH_HI = 140f, ARM_PITCH_LO = 55f;
+    // Arm reaches forward holding the sword out front (vanilla pose). Blade elevation in world =
+    // SWORD_TILT + SWORD_READY_PITCH; arm elevation = SWORD_READY_PITCH. Pitch 75 + tilt -75 → the
+    // blade comes out roughly horizontal-forward, pointing in the aim direction.
+    private static final float SWORD_READY_PITCH = 75f;
+    private static final float SWORD_READY_YAW = 6f;
+    private static final float SWORD_READY_ROLL = 0f;
+    private static final float SWORD_READY_BLEND = 0.9f;
 
     // ---- torso twist (exaggerated core power, degrees) ----
     private static final float WINDUP_DEG = 35f;
@@ -71,12 +78,23 @@ public final class WeaponController implements Disposable {
     private static final float GUN_L_PITCH = 94f, GUN_L_YAW = -42f, GUN_L_ROLL = -12f; // support hand
     private static final float GUN_BLEND_TIME = 0.15f; // tactical-frame transition
 
+    // ---- sword: local held-item offset from the hand pivot ----
+    // Sword is arm-anchored (vanilla parenting): the blade is rotated to continue DOWN the arm, so it
+    // extends forward-down from the fist at rest and swings naturally with the arm during an attack.
+    private static final float SWORD_SEAT_X = 0f;
+    private static final float SWORD_SEAT_Y = 0f;
+    private static final float SWORD_SEAT_Z = 0f;
+    private static final float SWORD_TILT  = 0f; // X: -Z blade → down the arm (-Y)
+    private static final float SWORD_TWIST = 0f;   // Y
+    private static final float SWORD_ROLL  = 90f;   // Z
+
     private final ModelInstance player;
     // Model faces -Z, so the character's RIGHT hand is the +X node — named ARM_L (driven by the
     // animator's l* fields). ARM_R (-X) is the left hand (r* fields).
     private final Node weaponArm;   // ARM_L == right hand
     private final Node supportArm;  // ARM_R == left hand
 
+    private final WeaponModels.SwordAsset swordAsset;
     private final Model swordModel, gunModel;
     private final ModelInstance sword, gun;
 
@@ -105,7 +123,8 @@ public final class WeaponController implements Disposable {
         weaponArm = player.getNode(MinecraftPlayerModel.ARM_L);
         supportArm = player.getNode(MinecraftPlayerModel.ARM_R);
 
-        swordModel = WeaponModels.buildSword();
+        swordAsset = WeaponModels.buildSword();
+        swordModel = swordAsset.model;
         gunModel = WeaponModels.buildGun();
         sword = new ModelInstance(swordModel);
         gun = new ModelInstance(gunModel);
@@ -135,6 +154,7 @@ public final class WeaponController implements Disposable {
         gunBlend = MathUtils.lerp(gunBlend, gunTarget, Math.min(1f, delta / GUN_BLEND_TIME));
 
         if (gunBlend > 0.01f) applyGunStance(pose);
+        if (current == Weapon.SWORD && !attacking) applySwordReadyPose(pose);
 
         if (attacking) {
             float dur = current == Weapon.FIST ? PUNCH_DUR : SWING_DUR;
@@ -143,6 +163,11 @@ public final class WeaponController implements Disposable {
             else if (current == Weapon.FIST) applyPunchPose(pose, attackT / dur);
             else applySwingPose(pose, attackT / dur);
         }
+    }
+
+    private void applySwordReadyPose(PlayerAnimator.ArmPose pose) {
+        armPose(pose.lRot, SWORD_READY_PITCH, SWORD_READY_YAW, SWORD_READY_ROLL);
+        pose.lWeight = Math.max(pose.lWeight, SWORD_READY_BLEND);
     }
 
     // ---------------------------------------------------------------- gun stance
@@ -242,8 +267,14 @@ public final class WeaponController implements Disposable {
         }
 
         if (current == Weapon.SWORD) {
+            // Arm-anchored: blade continues down the arm, so it hangs forward-down from the fist at
+            // rest and swings with the arm during an attack (and the trail samples correctly).
             anchor.set(player.transform).mul(weaponArm.globalTransform).translate(0f, -0.72f, 0f);
-            sword.transform.set(anchor).rotate(Vector3.X, -8f).translate(0f, 0f, -0.06f);
+            sword.transform.set(anchor)
+                .translate(SWORD_SEAT_X, SWORD_SEAT_Y, SWORD_SEAT_Z)
+                .rotate(Vector3.X, SWORD_TILT)
+                .rotate(Vector3.Y, SWORD_TWIST)
+                .rotate(Vector3.Z, SWORD_ROLL);
             if (attacking) sampleSwordVfx();
         } else if (attacking) { // FIST
             samplePunchVfx();
@@ -252,7 +283,7 @@ public final class WeaponController implements Disposable {
 
     private void sampleSwordVfx() {
         float p = attackT / SWING_DUR;
-        tip.set(0f, 0f, -WeaponModels.SWORD_TIP_Z).mul(sword.transform);
+        tip.set(0f, 0f, -swordAsset.tipZ).mul(sword.transform);
         base.set(0f, 0f, -0.05f).mul(sword.transform);
         if (p >= TRAIL_FROM && p <= TRAIL_TO) trail.addSample(tip, base);
         if (!struck && p >= STRIKE_AT) {
@@ -294,7 +325,7 @@ public final class WeaponController implements Disposable {
 
     @Override
     public void dispose() {
-        swordModel.dispose();
+        swordAsset.dispose();
         gunModel.dispose();
         trail.dispose();
         sparks.dispose();
