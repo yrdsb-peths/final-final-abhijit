@@ -3,6 +3,7 @@ package com.brawlgame.model;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.model.Node;
 import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Quaternion;
 
 /**
  * Procedural player animation following Minecraft's own {@code HumanoidModel.setupAnim} math.
@@ -38,6 +39,27 @@ public final class PlayerAnimator {
 
     private final float bodyRestY;
 
+    // Scratch quaternion so the arm anim can be blended toward a weapon override without allocating.
+    private final Quaternion qArm = new Quaternion();
+
+    /**
+     * A per-frame override for the arm nodes, produced by the weapon system. Each arm carries a
+     * target Euler orientation (radians, in the same yaw/pitch/roll convention as the walk anim)
+     * and a 0..1 weight: 0 = pure walk/idle swing, 1 = fully the weapon pose. The animator slerps
+     * between the two, so swings and grips layer cleanly on top of locomotion.
+     */
+    public static final class ArmPose {
+        /** Override rotations (full quaternions) + 0..1 blend weights. rRot drives ARM_R, lRot ARM_L. */
+        public final Quaternion rRot = new Quaternion();
+        public final Quaternion lRot = new Quaternion();
+        public float rWeight, lWeight;
+        /** Extra torso Y-twist (radians) layered on top of the lean — the "core power" of a swing.
+         *  Because the head and arms are children of the body node, this rotates the whole upper
+         *  body, driving the arm through a wide arc. */
+        public float bodyYaw;
+        public void reset() { rWeight = 0f; lWeight = 0f; bodyYaw = 0f; }
+    }
+
     public PlayerAnimator(ModelInstance instance) {
         this.instance = instance;
         head = instance.getNode(MinecraftPlayerModel.HEAD);
@@ -49,8 +71,9 @@ public final class PlayerAnimator {
         bodyRestY = body.translation.y; // waist pivot height; crouch lowers from here
     }
 
-    /** @param speed horizontal ground speed (blocks/s). */
-    public void update(float delta, float speed, boolean sprinting, boolean sneaking, boolean onGround) {
+    /** @param speed horizontal ground speed (blocks/s). @param pose weapon arm override, or null. */
+    public void update(float delta, float speed, boolean sprinting, boolean sneaking, boolean onGround,
+                       ArmPose pose) {
         idleTime += delta;
         boolean moving = speed > 0.05f;
 
@@ -78,17 +101,26 @@ public final class PlayerAnimator {
         legL.rotation.setEulerAnglesRad(0f, -legSwing, 0f);
 
         // Torso leans for sprint/crouch and drops when crouching; head & arms (children) follow it.
-        body.rotation.setEulerAnglesRad(0f, -bodyPitch, 0f); // negative X = tip the torso top FORWARD (toward facing)
+        // The attack twist (bodyYaw) is layered onto the Y axis so a swing rotates the whole torso —
+        // this is what carries the arm through its wide arc and gives the strike its momentum.
+        float bodyYaw = pose != null ? pose.bodyYaw : 0f;
+        body.rotation.setEulerAnglesRad(bodyYaw, -bodyPitch, 0f); // Y = attack twist, -X = lean forward
         body.translation.y = bodyRestY - sneak * SNEAK_DROP;
 
-        // Head counter-rotates to stay ~level: fully cancel the sprint lean, partly cancel the crouch
-        // tilt (so it looks slightly down when sneaking, like Minecraft).
-        head.rotation.setEulerAnglesRad(0f, lean + sneak * SNEAK_BODY * 0.7f, 0f); // counter the body tilt so head stays ~level
+        // Head counter-rotates to stay ~level: cancel the sprint/crouch lean (pitch), and shrug off
+        // most of the attack twist (yaw) so the torso whips but the head doesn't spin with it.
+        head.rotation.setEulerAnglesRad(-bodyYaw * 0.55f, lean + sneak * SNEAK_BODY * 0.7f, 0f);
 
         // Arms swing from the (leaned) shoulders; add crouch forward angle + idle sway. No manual
         // forward push — the forward motion now comes from the body lean carrying the shoulders.
-        armR.rotation.setEulerAnglesRad(0f, armSwing + sneakArm + swayX, swayZ);
-        armL.rotation.setEulerAnglesRad(0f, -armSwing + sneakArm - swayX, -swayZ);
+        // Then blend toward the weapon pose (sword swing / two-handed grip) by its per-arm weight.
+        qArm.setEulerAnglesRad(0f, armSwing + sneakArm + swayX, swayZ);
+        if (pose != null && pose.rWeight > 0f) qArm.slerp(pose.rRot, Math.min(1f, pose.rWeight));
+        armR.rotation.set(qArm);
+
+        qArm.setEulerAnglesRad(0f, -armSwing + sneakArm - swayX, -swayZ);
+        if (pose != null && pose.lWeight > 0f) qArm.slerp(pose.lRot, Math.min(1f, pose.lWeight));
+        armL.rotation.set(qArm);
 
         instance.calculateTransforms();
     }

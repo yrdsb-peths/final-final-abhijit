@@ -9,7 +9,8 @@
       "Bash(rm -f /tmp/f3_view.png /tmp/f3_z.png /tmp/mcd_run10.log)",
       "Bash(rm -f /tmp/f3_view.png /tmp/f3_z.png /tmp/mcd_run11.log)",
       "Bash(./gradlew :lwjgl3:compileJava --console=plain)",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(./gradlew :lwjgl3:compileJava -q)"
     ]
   }
 }

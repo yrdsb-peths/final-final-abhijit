@@ -66,6 +66,8 @@ public class DungeonGame extends ApplicationAdapter {
         player.render(modelBatch, environment);
         modelBatch.end();
 
+        player.renderTrail(cameraRig.camera); // additive swoosh, over the scene
+
         if (showDebug) debug.render(cameraRig.camera, player);
     }
 

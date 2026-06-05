@@ -12,6 +12,7 @@ import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
 import com.badlogic.gdx.utils.Disposable;
+import com.brawlgame.combat.WeaponController;
 import com.brawlgame.model.MinecraftPlayerModel;
 import com.brawlgame.model.PlayerAnimator;
 
@@ -53,6 +54,8 @@ public final class Player implements Disposable {
     private final Model model;
     private final ModelInstance instance;
     private final PlayerAnimator animator;
+    private final WeaponController weapon;
+    private final PlayerAnimator.ArmPose armPose = new PlayerAnimator.ArmPose();
 
     private final Vector3 pos = new Vector3();
     private final Vector3 prevPos = new Vector3();
@@ -71,12 +74,14 @@ public final class Player implements Disposable {
         model = MinecraftPlayerModel.build(skin);
         instance = new ModelInstance(model);
         animator = new PlayerAnimator(instance);
+        weapon = new WeaponController(instance);
         renderPos.set(pos);
         applyTransform();
     }
 
     public void update(float delta, Camera camera) {
         readInput();
+        weapon.handleInput();
 
         // fixed-step physics with leftover-time interpolation
         tickAcc += Math.min(delta, 0.25f);
@@ -94,7 +99,10 @@ public final class Player implements Disposable {
         applyTransform();
 
         float speed = (float) Math.sqrt(vx * vx + vz * vz) * 20f; // blocks/s
-        animator.update(delta, speed, sprinting, sneaking, onGround);
+        weapon.updatePose(delta, armPose);
+        animator.update(delta, speed, sprinting, sneaking, onGround, armPose);
+        weapon.postAnimate();   // skeleton is now current → anchor weapon, trace trail, fire sparks
+        weapon.updateVfx(delta);
     }
 
     private void readInput() {
@@ -177,6 +185,12 @@ public final class Player implements Disposable {
 
     public void render(ModelBatch batch, Environment env) {
         batch.render(instance, env);
+        weapon.renderWorld(batch, env); // held weapon + impact sparks (within the 3D pass)
+    }
+
+    /** Additive swoosh ribbon — call after the ModelBatch pass, before any HUD. */
+    public void renderTrail(Camera camera) {
+        weapon.renderTrail(camera);
     }
 
     // ---- accessors (camera follow + debug overlay) ----
@@ -193,6 +207,7 @@ public final class Player implements Disposable {
 
     @Override
     public void dispose() {
+        weapon.dispose();
         model.dispose(); // the skin Texture is owned/disposed by DungeonGame
     }
 }
