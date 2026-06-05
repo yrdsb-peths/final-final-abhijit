@@ -189,6 +189,8 @@ public final class Player implements Disposable {
     public float getHitboxHeight() { return sneaking ? SNEAK_H : STAND_H; }
     public float getEyeHeight() { return sneaking ? SNEAK_EYE : STAND_EYE; }
 
+    public ModelInstance getModelInstance() { return instance; }
+
     @Override
     public void dispose() {
         model.dispose(); // the skin Texture is owned/disposed by DungeonGame
