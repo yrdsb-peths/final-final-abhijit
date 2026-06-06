@@ -9,7 +9,10 @@ import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
+import com.brawlgame.combat.WeaponController;
+import com.brawlgame.entity.CombatDummy;
 import com.brawlgame.entity.Player;
+import com.brawlgame.gfx.AimCone;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
 import com.brawlgame.render.GridRenderer;
@@ -27,7 +30,12 @@ public class DungeonGame extends ApplicationAdapter {
     private DebugRenderer debug;
     private boolean showDebug = false; // hidden by default; F3 toggles the hitbox overlay
     private Player player;
+    private CombatDummy dummy;
+    private AimCone aimCone;
     private Texture skin;
+
+    /** Half-width of the gun's straight-shot rectangular aim reticle (world units). */
+    private static final float GUN_AIM_HALF_WIDTH = 0.35f;
 
     @Override
     public void create() {
@@ -46,6 +54,9 @@ public class DungeonGame extends ApplicationAdapter {
 
         skin = new Texture(Gdx.files.internal("textures/player.png"));
         player = new Player(skin);
+        dummy = new CombatDummy(skin, 0f, -5f); // a few blocks in front of spawn
+        player.getWeapon().setTarget(dummy);    // melee hits (and their hearts) resolve against it
+        aimCone = new AimCone();
     }
 
     @Override
@@ -55,6 +66,7 @@ public class DungeonGame extends ApplicationAdapter {
         if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) showDebug = !showDebug;
 
         player.update(delta, cameraRig.camera);
+        dummy.update(delta, player.getPosition());
         cameraRig.update(delta, player.getPosition(), player.isSprinting());
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -63,9 +75,21 @@ public class DungeonGame extends ApplicationAdapter {
 
         modelBatch.begin(cameraRig.camera);
         grid.render(modelBatch);
+        dummy.render(modelBatch, environment);
         player.render(modelBatch, environment);
         modelBatch.end();
 
+        // Ground aim reticle (the cone/rectangle), then the additive swoosh — both over the scene.
+        WeaponController w = player.getWeapon();
+        if (w.aimConeVisible()) {
+            if (w.getWeapon() == WeaponController.Weapon.GUN) {
+                aimCone.renderRect(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+                    player.getFacingDeg(), GUN_AIM_HALF_WIDTH, w.coneRange());
+            } else {
+                aimCone.render(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+                    player.getFacingDeg(), w.coneHalfAngle(), w.coneRange());
+            }
+        }
         player.renderTrail(cameraRig.camera); // additive swoosh, over the scene
 
         if (showDebug) debug.render(cameraRig.camera, player);
@@ -82,6 +106,8 @@ public class DungeonGame extends ApplicationAdapter {
         grid.dispose();
         debug.dispose();
         player.dispose();
+        dummy.dispose();
+        aimCone.dispose();
         skin.dispose();
     }
 }

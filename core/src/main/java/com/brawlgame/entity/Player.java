@@ -99,6 +99,7 @@ public final class Player implements Disposable {
         applyTransform();
 
         float speed = (float) Math.sqrt(vx * vx + vz * vz) * 20f; // blocks/s
+        weapon.setAim(renderPos.x, renderPos.z, facingDeg); // for melee arc/hit tests
         weapon.updatePose(delta, armPose);
         animator.update(delta, speed, sprinting, sneaking, onGround, armPose);
         weapon.postAnimate();   // skeleton is now current → anchor weapon, trace trail, fire sparks
@@ -204,6 +205,9 @@ public final class Player implements Disposable {
     public float getEyeHeight() { return sneaking ? SNEAK_EYE : STAND_EYE; }
 
     public ModelInstance getModelInstance() { return instance; }
+
+    /** The weapon controller (so the HUD/aim-cone can read the current weapon + cone shape). */
+    public WeaponController getWeapon() { return weapon; }
 
     @Override
     public void dispose() {
