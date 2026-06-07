@@ -51,7 +51,7 @@ import com.brawlgame.ui.Hotbar;
 public final class MapMakerScreen implements Screen {
 
     /** The clickable side controls. BOUNTY is a passive mode indicator (Brawl-Stars flavour). */
-    private enum Btn { BOUNTY, GRID, INVENTORY, UNDO, REDO, CLEAR, SAVE }
+    private enum Btn { BOUNTY, GRID, BACK, INVENTORY, UNDO, REDO, CLEAR, SAVE }
 
     private static final float BTN = 64f;   // square side-button size, px
     private static final float BTN_GAP = 10f;
@@ -108,15 +108,27 @@ public final class MapMakerScreen implements Screen {
         map = new GameMap(theme, size);
 
         // Bright daylight: warm ambient (so shadows stay semi-transparent, not black) plus a strong
-        // shadow-casting afternoon sun. The shadow frustum is sized to span the arena + canyon ring.
-        float vp = Math.max(map.cols(), map.rows()) + 34f;
-        shadowLight = new DirectionalShadowLight(4096, 4096, vp, vp, 1f, 400f);
-        shadowLight.set(1.0f, 0.96f, 0.84f, SUN_DIR);
+        // afternoon sun. We try to set up a shadow-map pass; if the GPU/driver can't allocate the
+        // shadow framebuffer (some macOS GL profiles refuse large depth FBOs), we fall back to flat
+        // daylight so the editor always runs. The shadow frustum spans the arena + canyon ring.
         environment = new Environment();
         environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.58f, 1f));
-        environment.add(shadowLight);
-        environment.shadowMap = shadowLight;
-        shadowBatch = new ModelBatch(new DepthShaderProvider());
+        float vp = Math.max(map.cols(), map.rows()) + 34f;
+        try {
+            // far is kept tight (proportional to the frustum) so the depth buffer isn't wasted over
+            // hundreds of empty units — that waste is what caused shadow-acne "triangles" on faces.
+            shadowLight = new DirectionalShadowLight(2048, 2048, vp, vp, 1f, vp * 2.2f);
+            shadowLight.set(1.0f, 0.96f, 0.84f, SUN_DIR);
+            environment.add(shadowLight);
+            shadowBatch = new ModelBatch(new DepthShaderProvider());
+            shadowsEnabled = true;
+        } catch (Throwable t) {
+            Gdx.app.error("MapMaker", "Shadow map unavailable; using flat daylight", t);
+            shadowsEnabled = false;
+            if (shadowLight != null) { shadowLight.dispose(); shadowLight = null; }
+            environment.add(new DirectionalLight().set(1.0f, 0.96f, 0.84f,
+                SUN_DIR.x, SUN_DIR.y, SUN_DIR.z));
+        }
 
         library = new BlockLibrary(theme);
         renderer = new MapRenderer(map, library);
@@ -153,12 +165,18 @@ public final class MapMakerScreen implements Screen {
         renderer.rebuildIfDirty();
 
         // --- Shadow depth pass: render opaque casters from the sun's point of view. ---
-        shadowLight.begin(cam.getTarget(), SUN_DIR);
-        shadowBatch.begin(shadowLight.getCamera());
-        scenery.renderCasters(shadowBatch);
-        renderer.renderCasters(shadowBatch);
-        shadowBatch.end();
-        shadowLight.end();
+        // Guarded so a missing framebuffer can never crash the editor; the shadow map is only bound
+        // to the environment when its depth was actually rendered this frame.
+        boolean canShadow = shadowsEnabled && shadowLight != null && shadowLight.getFrameBuffer() != null;
+        if (canShadow) {
+            shadowLight.begin(cam.getTarget(), SUN_DIR);
+            shadowBatch.begin(shadowLight.getCamera());
+            scenery.renderCasters(shadowBatch);
+            renderer.renderCasters(shadowBatch);
+            shadowBatch.end();
+            shadowLight.end();
+        }
+        environment.shadowMap = canShadow ? shadowLight : null;
 
         // --- Main lit pass (samples the shadow map via the environment). ---
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
@@ -237,6 +255,7 @@ public final class MapMakerScreen implements Screen {
             case REDO:      map.redo(); break;
             case CLEAR:     map.clearAll(); break;
             case SAVE:      saveMap(); break;
+            case BACK:      game.setScreen(new MainMenuScreen(game)); break;
             case BOUNTY:    break; // passive indicator
         }
     }
@@ -372,6 +391,7 @@ public final class MapMakerScreen implements Screen {
         switch (id) {
             case BOUNTY: return "BOUNTY";
             case GRID:   return "GRID";
+            case BACK:   return "EXIT";
             case INVENTORY: return "INV (E)";
             case UNDO:   return "UNDO";
             case REDO:   return "REDO";
@@ -386,8 +406,8 @@ public final class MapMakerScreen implements Screen {
         float h = Gdx.graphics.getHeight(), w = Gdx.graphics.getWidth();
         List<Rect> list = new ArrayList<>();
         float topY = h - 90f;
-        // Left column: bounty indicator, grid toggle.
-        Btn[] left = {Btn.BOUNTY, Btn.GRID};
+        // Left column: bounty indicator, grid toggle, exit-to-menu.
+        Btn[] left = {Btn.BOUNTY, Btn.GRID, Btn.BACK};
         for (int i = 0; i < left.length; i++) {
             list.add(new Rect(left[i], EDGE, topY - i * (BTN + BTN_GAP), BTN, BTN));
         }
@@ -421,8 +441,8 @@ public final class MapMakerScreen implements Screen {
         if (modelBatch == null) return;
         if (Gdx.input.getInputProcessor() != null) Gdx.input.setInputProcessor(null);
         modelBatch.dispose();
-        shadowBatch.dispose();
-        shadowLight.dispose();
+        if (shadowBatch != null) shadowBatch.dispose();
+        if (shadowLight != null) shadowLight.dispose();
         renderer.dispose();
         scenery.dispose();
         library.dispose();

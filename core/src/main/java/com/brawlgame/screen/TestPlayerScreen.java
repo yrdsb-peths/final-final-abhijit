@@ -3,6 +3,7 @@ package com.brawlgame.screen;
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputMultiplexer;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
@@ -11,12 +12,20 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.brawlgame.combat.WeaponController;
+import com.brawlgame.entity.ArmorRenderer;
+import com.brawlgame.entity.ChestEntity;
 import com.brawlgame.entity.CombatDummy;
 import com.brawlgame.entity.Player;
+import com.brawlgame.entity.SpikeHazard;
 import com.brawlgame.gfx.AimCone;
+import com.brawlgame.gfx.GroundIndicator;
+import com.brawlgame.item.Inventory;
+import com.brawlgame.item.ItemStack;
+import com.brawlgame.item.ItemType;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
 import com.brawlgame.render.GridRenderer;
+import com.brawlgame.ui.PlayerUI;
 
 /**
  * The "Test Player" mode — Phase 1 of the game lifted verbatim into a {@link Screen}: an accurate,
@@ -27,6 +36,8 @@ public final class TestPlayerScreen implements Screen {
 
     /** Half-width of the gun's straight-shot rectangular aim reticle (world units). */
     private static final float GUN_AIM_HALF_WIDTH = 0.35f;
+    /** Radius of the green ground-highlight ring under the player (world units). */
+    private static final float PLAYER_RING_RADIUS = 0.7f;
 
     private final Game game;
 
@@ -38,8 +49,14 @@ public final class TestPlayerScreen implements Screen {
     private boolean showDebug = false; // hidden by default; F3 toggles the hitbox overlay
     private Player player;
     private CombatDummy dummy;
+    private ChestEntity chest;
     private AimCone aimCone;
-    private Texture skin;
+    private GroundIndicator ground;
+    private PlayerUI ui;
+    private Inventory inventory;
+    private ArmorRenderer armor;
+    private SpikeHazard hazard;
+    private Texture skin, chestWood, chestGold;
 
     public TestPlayerScreen(Game game) {
         this.game = game;
@@ -64,30 +81,92 @@ public final class TestPlayerScreen implements Screen {
         dummy = new CombatDummy(skin, 0f, -5f); // a few blocks in front of spawn
         player.getWeapon().setTarget(dummy);    // melee hits (and their hearts) resolve against it
         aimCone = new AimCone();
+        ground = new GroundIndicator();
+
+        // A demo chest a few blocks to the side so the hover-highlight + chest UI are exercisable.
+        chestWood = new Texture(Gdx.files.internal("textures/blocks/oak_planks.png"));
+        chestGold = new Texture(Gdx.files.internal("textures/blocks/gold_block.png"));
+        chest = new ChestEntity(chestWood, chestGold, 3f, -3f);
+
+        // Inventory + starter items (whitelist only): weapons on the hotbar, armour in the store.
+        inventory = new Inventory();
+        inventory.set(Inventory.HOTBAR_BASE + 0, new ItemStack(ItemType.DIAMOND_SWORD));
+        inventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN));
+        inventory.set(Inventory.HOTBAR_BASE + 2, new ItemStack(ItemType.IRON_SWORD));
+        inventory.set(Inventory.STORAGE_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
+        inventory.set(Inventory.STORAGE_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
+        inventory.set(Inventory.STORAGE_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
+        inventory.set(Inventory.STORAGE_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
+        inventory.set(Inventory.STORAGE_BASE + 9, new ItemStack(ItemType.IRON_HELMET));
+        inventory.set(Inventory.STORAGE_BASE + 10, new ItemStack(ItemType.IRON_CHESTPLATE));
+        // Equip a full diamond set so the rig-parented armour is visible on spawn (the store keeps
+        // the iron pieces for drag-testing); swap any slot through the inventory UI.
+        inventory.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
+        inventory.set(Inventory.ARMOR_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
+        inventory.set(Inventory.ARMOR_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
+        inventory.set(Inventory.ARMOR_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
+        ui = new PlayerUI(inventory);
+        armor = new ArmorRenderer(inventory); // worn pieces, parented to the player's rig bones
+        player.setHeldItemSupplier(ui::selectedItem); // weapon follows the selected hotbar slot
+        player.setInventory(inventory); // worn armour feeds the damage-reduction formula
+
+        // A spike pad in front of spawn: step on it to take 10 raw damage/tick, reduced by your armour.
+        hazard = new SpikeHazard(-2.5f, -1.5f);
+
+        // UI gets first dibs on clicks/keys; the world polls the rest.
+        Gdx.input.setInputProcessor(new InputMultiplexer(ui));
     }
 
     @Override
     public void render(float deltaTime) {
         float delta = Math.min(deltaTime, 1f / 30f);
 
+        // Esc closes an open panel first; only exits to the menu when nothing is open.
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
-            game.setScreen(new MainMenuScreen(game));
-            return;
+            if (ui.isModalOpen()) ui.closeModal();
+            else { game.setScreen(new MainMenuScreen(game)); return; }
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) showDebug = !showDebug;
 
-        player.update(delta, cameraRig.camera);
-        dummy.update(delta, player.getPosition());
-        cameraRig.update(delta, player.getPosition(), player.isSprinting());
+        // Local-player hover highlight on the chest, and R-to-open within range.
+        chest.updateHover(cameraRig.camera, Gdx.input.getX(), Gdx.input.getY());
+        if (!ui.isModalOpen() && Gdx.input.isKeyJustPressed(Input.Keys.R)
+                && chest.canInteract(player.getPosition(), ChestEntity.DEFAULT_RANGE)) {
+            ui.openChest(chest.slots(), "Chest");
+        }
+
+        // Freeze world control while a panel is open (clicks/keys belong to the UI).
+        if (!ui.isModalOpen()) {
+            player.update(delta, cameraRig.camera);
+            dummy.update(delta, player.getPosition());
+            cameraRig.update(delta, player.getPosition(), player.isSprinting());
+            // Spike pad: applies raw damage when stood on; the player's armour reduces it.
+            float raw = hazard.update(delta, player.getPosition());
+            if (raw > 0f) player.applyDamage(raw);
+        }
+        ui.setHealth(player.getHealth(), player.getMaxHealth()); // hearts row follows current health
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         Gdx.gl.glClearColor(0.039f, 0.043f, 0.055f, 1f); // near-black void
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
+        // Floor + world props (chest) first.
         modelBatch.begin(cameraRig.camera);
         grid.render(modelBatch);
+        chest.render(modelBatch, environment);
+        hazard.render(modelBatch, environment);
+        modelBatch.end();
+
+        // Ground highlight rings: after the floor, before the characters, so they stand on top.
+        ground.renderEnemy(cameraRig.camera, dummy.position().x, dummy.position().z, dummy.radius() + 0.15f);
+        ground.renderPlayer(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+            PLAYER_RING_RADIUS, player.getFacingDeg());
+
+        // Character pass: dummy + player (models, held weapon, projectiles, hearts).
+        modelBatch.begin(cameraRig.camera);
         dummy.render(modelBatch, environment);
         player.render(modelBatch, environment);
+        armor.render(modelBatch, environment, player.getModelInstance()); // worn armour over the rig
         modelBatch.end();
 
         // Ground aim reticle (the cone/rectangle), then the additive swoosh — both over the scene.
@@ -104,6 +183,9 @@ public final class TestPlayerScreen implements Screen {
         player.renderTrail(cameraRig.camera); // additive swoosh, over the scene
 
         if (showDebug) debug.render(cameraRig.camera, player);
+
+        // HUD on top of everything: hotbar always, plus the inventory/creative/chest panel when open.
+        ui.render();
     }
 
     @Override
@@ -118,12 +200,20 @@ public final class TestPlayerScreen implements Screen {
     @Override
     public void dispose() {
         if (modelBatch == null) return; // never shown
+        if (Gdx.input.getInputProcessor() != null) Gdx.input.setInputProcessor(null);
         modelBatch.dispose();
         grid.dispose();
         debug.dispose();
         player.dispose();
         dummy.dispose();
+        chest.dispose();
         aimCone.dispose();
+        ground.dispose();
+        armor.dispose();
+        hazard.dispose();
+        ui.dispose();
+        chestWood.dispose();
+        chestGold.dispose();
         skin.dispose();
         modelBatch = null;
     }

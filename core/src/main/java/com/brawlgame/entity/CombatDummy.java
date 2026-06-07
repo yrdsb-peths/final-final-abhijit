@@ -79,11 +79,13 @@ public final class CombatDummy implements CombatTarget, Disposable {
     }
 
     @Override
-    public void onHit(float damage, Vector3 fromDir) {
+    public void onHit(float damage, Vector3 fromDir, boolean crit) {
         hurtTimer = HURT_DUR;
         tinted = false;                       // force re-tint next applyTint()
-        // Hearts pop ON the dummy itself, at chest height.
-        hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.4f, pos.z), 5);
+        // Hearts pop ON the dummy itself, at chest height. A critical hit explodes into a much heavier
+        // burst (plus a second offset puff) so the extra power reads instantly.
+        hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.4f, pos.z), crit ? 16 : 5);
+        if (crit) hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.0f, pos.z), 10);
     }
 
     public void render(ModelBatch batch, Environment env) {

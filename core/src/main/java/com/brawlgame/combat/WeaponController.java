@@ -4,21 +4,24 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttributes.Usage;
 import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.Material;
 import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
-import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
+import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
+import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.model.Node;
-import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Quaternion;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
+import com.brawlgame.gfx.BlockParticles;
 import com.brawlgame.gfx.SwooshTrail;
+import com.brawlgame.item.ItemType;
 import com.brawlgame.model.MinecraftPlayerModel;
 import com.brawlgame.model.PlayerAnimator;
 import com.brawlgame.model.WeaponModels;
@@ -59,9 +62,12 @@ public final class WeaponController implements Disposable {
     // ---- sword arm arc (degrees) ----
     private static final float ARM_PITCH_HI = 140f, ARM_PITCH_LO = 55f;
 
-    // ---- melee hit resolution (reach in blocks, arc half-angle°, visual damage) ----
-    private static final float SWORD_REACH = 2.6f, SWORD_HALF = 70f, SWORD_DMG = 99f;
-    private static final float PUNCH_REACH = 1.8f, PUNCH_HALF = 25f, PUNCH_DMG = 30f;
+    // ---- melee hit resolution (reach in blocks, arc half-angle°) — damage is per-material (meleeBaseDamage) ----
+    private static final float SWORD_REACH = 2.6f, SWORD_HALF = 70f;
+    private static final float PUNCH_REACH = 1.8f, PUNCH_HALF = 25f;
+    // Vanilla attack damage: fist 1; wood/gold 4, stone 5, iron 6, diamond 7. A descending mid-air
+    // hit is a CRITICAL and deals 1.5× (see critReady).
+    private static final float CRIT_MULT = 1.5f;
     // Arm reaches forward holding the sword out front (vanilla pose). Blade elevation in world =
     // SWORD_TILT + SWORD_READY_PITCH; arm elevation = SWORD_READY_PITCH. Pitch 75 + tilt -75 → the
     // blade comes out roughly horizontal-forward, pointing in the aim direction.
@@ -78,8 +84,9 @@ public final class WeaponController implements Disposable {
     private static final float GUN_OFF_X = 0.10f;   // pulled inward toward centre (not out the shoulder)
     private static final float GUN_OFF_Y = 1.7f;   // chest height
     private static final float GUN_OFF_Z = -0.7f;  // forward of the chest
-    private static final float GUN_BODY_YAW   = -4f; // angle barrel inward onto the centre line
-    private static final float GUN_BODY_PITCH = 20f; // tilt muzzle up (aim line)
+    private static final float GUN_BODY_YAW   = 0f; // angle barrel inward onto the centre line
+    private static final float GUN_BODY_PITCH = 2; // tilt muzzle up (aim line)
+    private static final float GUN_SCALE      = 1.4f; // 40% bigger than the built model
 
     // ---- gun: arm stance angles (degrees) — pitch, yaw(inward), roll ----
     private static final float GUN_R_PITCH = 80f, GUN_R_YAW = 22f,  GUN_R_ROLL = 16f;  // trigger hand
@@ -107,9 +114,14 @@ public final class WeaponController implements Disposable {
     private final Node weaponArm;   // ARM_L == right hand
     private final Node supportArm;  // ARM_R == left hand
 
-    private final WeaponModels.SwordAsset swordAsset;
-    private final Model swordModel, gunModel;
-    private final ModelInstance sword, gun;
+    // One built model per sword material; the held instance swaps to match the selected hotbar item.
+    private final java.util.EnumMap<WeaponModels.SwordVariant, WeaponModels.SwordAsset> swordAssets =
+        new java.util.EnumMap<>(WeaponModels.SwordVariant.class);
+    private final java.util.EnumMap<WeaponModels.SwordVariant, ModelInstance> swordInstances =
+        new java.util.EnumMap<>(WeaponModels.SwordVariant.class);
+    private WeaponModels.SwordVariant swordVariant = WeaponModels.SwordVariant.DIAMOND;
+    private final WeaponModels.GunAsset gunAsset;
+    private final ModelInstance gun;
 
     private final SwooshTrail trail = new SwooshTrail();
     // Hit hearts are spawned by the struck entity (CombatDummy), so they appear ON the entity.
@@ -133,20 +145,25 @@ public final class WeaponController implements Disposable {
 
     // aim / combat context (set by the Player each frame)
     private CombatTarget target;
+    private BlockCollider collider; // optional: walls that stop potato projectiles
     private float aimX, aimZ, facingDeg;
+    private boolean critReady; // player is mid-air and descending → next melee hit crits
     private final Vector3 hitDir = new Vector3();
 
-    // gun projectiles (fixed pool)
+    /** Straight-line travel speed (blocks/s) of a fired potato before it reaches range and drops. */
+    private static final float GUN_LAUNCH_SPEED = 18f;
+
+    // gun projectiles (fixed pool) + the dirt/potato impact splash
     private static final int MAX_POTATO = 16;
-    private static final class Potato {
-        final Vector3 pos = new Vector3();
-        final Vector3 vel = new Vector3();
-        float travelled;
-        boolean alive;
-    }
-    private final Potato[] potatoes = new Potato[MAX_POTATO];
-    private final ModelInstance[] potatoFx = new ModelInstance[MAX_POTATO];
+    private final PotatoProjectile[] potatoes = new PotatoProjectile[MAX_POTATO];
     private final Model potatoModel;
+    private final Texture potatoTex;
+    private final BlockParticles impactFx = new BlockParticles();
+    private final Matrix4 gunMat = new Matrix4();
+    private final Vector3 muzzlePos = new Vector3();
+    private final Vector3 launchVel = new Vector3();
+    private final Vector3 eyePos = new Vector3();     // body/eye origin for the muzzle-clip ray
+    private final Vector3 muzzleHit = new Vector3();  // wall surface in front of a clipped muzzle
     private float gunCooldown;
     private boolean pendingFire;
 
@@ -155,27 +172,60 @@ public final class WeaponController implements Disposable {
         weaponArm = player.getNode(MinecraftPlayerModel.ARM_L);
         supportArm = player.getNode(MinecraftPlayerModel.ARM_R);
 
-        swordAsset = WeaponModels.buildSword();
-        swordModel = swordAsset.model;
-        gunModel = WeaponModels.buildGun();
-        sword = new ModelInstance(swordModel);
-        gun = new ModelInstance(gunModel);
+        for (WeaponModels.SwordVariant v : WeaponModels.SwordVariant.values()) {
+            WeaponModels.SwordAsset a = WeaponModels.buildSword(v);
+            swordAssets.put(v, a);
+            swordInstances.put(v, new ModelInstance(a.model));
+        }
+        gunAsset = WeaponModels.buildGun();
+        gun = new ModelInstance(gunAsset.model);
 
-        // Small potato projectile (shared model, pooled instances).
-        Material spud = new Material(ColorAttribute.createDiffuse(new Color(0.78f, 0.62f, 0.36f, 1f)));
-        potatoModel = new ModelBuilder().createBox(0.16f, 0.16f, 0.22f, spud, Usage.Position | Usage.Normal);
+        // Potato projectile: a small 3D box with a clean procedural potato skin (shared model, pooled).
+        potatoTex = WeaponModels.buildPotatoTexture();
+        potatoModel = WeaponModels.buildPotatoBox(potatoTex);
         for (int i = 0; i < MAX_POTATO; i++) {
-            potatoes[i] = new Potato();
-            potatoFx[i] = new ModelInstance(potatoModel);
+            potatoes[i] = new PotatoProjectile(new ModelInstance(potatoModel));
         }
     }
 
-    /** Edge-detected input: 1 = fists, 2 = sword, 3 = gun, left-click = attack (fists/sword). */
-    public void handleInput() {
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_1)) current = Weapon.FIST;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_2)) current = Weapon.SWORD;
-        if (Gdx.input.isKeyJustPressed(Input.Keys.NUM_3)) current = Weapon.GUN;
+    /** The active weapon, set from the selected hotbar item by the screen (no hardcoded weapon keys). */
+    public void setWeapon(Weapon weapon) {
+        this.current = weapon;
+    }
 
+    /**
+     * Equip from the selected hotbar item: derives the weapon category AND, for a sword, which material
+     * variant's model/texture to hold (wooden → iron → diamond, etc.). Null/non-weapon → fists.
+     */
+    public void setHeldItem(ItemType item) {
+        current = weaponFor(item);
+        if (item != null && item.isSword()) swordVariant = variantFor(item);
+    }
+
+    private static WeaponModels.SwordVariant variantFor(ItemType item) {
+        switch (item) {
+            case WOOD_SWORD:  return WeaponModels.SwordVariant.WOOD;
+            case STONE_SWORD: return WeaponModels.SwordVariant.STONE;
+            case IRON_SWORD:  return WeaponModels.SwordVariant.IRON;
+            case GOLD_SWORD:  return WeaponModels.SwordVariant.GOLD;
+            default:          return WeaponModels.SwordVariant.DIAMOND;
+        }
+    }
+
+    /** The held sword instance + asset for the currently selected material variant. */
+    private ModelInstance sword() { return swordInstances.get(swordVariant); }
+    private WeaponModels.SwordAsset swordAsset() { return swordAssets.get(swordVariant); }
+
+    /** Maps the item in the selected hotbar slot to a weapon: swords→SWORD, potato gun→GUN, else FIST. */
+    public static Weapon weaponFor(ItemType item) {
+        if (item == null) return Weapon.FIST;
+        if (item == ItemType.POTATO_GUN) return Weapon.GUN;
+        if (item.isSword()) return Weapon.SWORD;
+        return Weapon.FIST;
+    }
+
+    /** Edge-detected attack input only: left-click swings (fist/sword) or fires (gun). */
+    public void handleInput() {
         boolean click = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
         if (click && !prevClick) {
             if (current == Weapon.GUN) {
@@ -297,14 +347,19 @@ public final class WeaponController implements Disposable {
 
     // ---------------------------------------------------------------- post-anim placement / vfx
 
+    /** The gun's world matrix — pinned in front of the chest, tilted up + angled inward, 40% larger. */
+    private void buildGunMatrix(Matrix4 out) {
+        out.set(player.transform)
+            .translate(GUN_OFF_X, GUN_OFF_Y, GUN_OFF_Z)
+            .rotate(Vector3.Y, GUN_BODY_YAW)
+            .rotate(Vector3.X, GUN_BODY_PITCH)
+            .scale(GUN_SCALE, GUN_SCALE, GUN_SCALE);
+    }
+
     public void postAnimate() {
         if (current == Weapon.GUN) {
-            // Pin the gun in player-local space: in front of the chest, tilted up + angled inward so
-            // the barrel runs down the aim line. Independent of arm length → no shoulder float.
-            gun.transform.set(player.transform)
-                .translate(GUN_OFF_X, GUN_OFF_Y, GUN_OFF_Z)
-                .rotate(Vector3.Y, GUN_BODY_YAW)
-                .rotate(Vector3.X, GUN_BODY_PITCH);
+            // Independent of arm length → no shoulder float; the muzzle is read off this same matrix.
+            buildGunMatrix(gun.transform);
             return;
         }
 
@@ -312,7 +367,7 @@ public final class WeaponController implements Disposable {
             // Arm-anchored: blade continues down the arm, so it hangs forward-down from the fist at
             // rest and swings with the arm during an attack (and the trail samples correctly).
             anchor.set(player.transform).mul(weaponArm.globalTransform).translate(0f, -0.72f, 0f);
-            sword.transform.set(anchor)
+            sword().transform.set(anchor)
                 .translate(SWORD_SEAT_X, SWORD_SEAT_Y, SWORD_SEAT_Z)
                 .rotate(Vector3.X, SWORD_TILT)
                 .rotate(Vector3.Y, SWORD_TWIST)
@@ -326,6 +381,9 @@ public final class WeaponController implements Disposable {
     /** The combat target the attacks resolve against (the dummy), set by the Player. */
     public void setTarget(CombatTarget target) { this.target = target; }
 
+    /** Optional world collider so potato projectiles stop on walls/fences (null = no walls). */
+    public void setCollider(BlockCollider collider) { this.collider = collider; }
+
     /** Player feeds its world position + facing each frame, for melee arc tests. */
     public void setAim(float x, float z, float facingDeg) {
         this.aimX = x;
@@ -333,8 +391,24 @@ public final class WeaponController implements Disposable {
         this.facingDeg = facingDeg;
     }
 
+    /** Player feeds its physics state each frame: true when airborne AND falling → the hit will crit. */
+    public void setCritReady(boolean critReady) { this.critReady = critReady; }
+
+    /** Vanilla base attack damage for the active melee weapon (fist or the held sword material). */
+    private float meleeBaseDamage() {
+        if (current == Weapon.FIST) return 1f;
+        switch (swordVariant) {
+            case STONE:   return 5f;
+            case IRON:    return 6f;
+            case DIAMOND: return 7f;
+            case WOOD:
+            case GOLD:
+            default:      return 4f;
+        }
+    }
+
     /** If the target sits within {@code reach} and the frontal arc, register the hit + knockback. */
-    private boolean tryMeleeHit(float reach, float halfDeg, float dmg) {
+    private boolean tryMeleeHit(float reach, float halfDeg, float dmg, boolean crit) {
         if (target == null) return false;
         Vector3 tp = target.position();
         float dx = tp.x - aimX, dz = tp.z - aimZ;
@@ -347,18 +421,20 @@ public final class WeaponController implements Disposable {
         float dot = (dx * fwdX + dz * fwdZ) / dist;
         if (dot < MathUtils.cosDeg(halfDeg)) return false; // outside the swing arc
         hitDir.set(dx, 0f, dz).nor();
-        target.onHit(dmg, hitDir);
+        target.onHit(dmg, hitDir, crit);
         return true;
     }
 
     private void sampleSwordVfx() {
         float p = attackT / SWING_DUR;
-        tip.set(0f, 0f, -swordAsset.tipZ).mul(sword.transform);
-        base.set(0f, 0f, -0.05f).mul(sword.transform);
+        tip.set(0f, 0f, -swordAsset().tipZ).mul(sword().transform);
+        base.set(0f, 0f, -0.05f).mul(sword().transform);
         if (p >= TRAIL_FROM && p <= TRAIL_TO) trail.addSample(tip, base);
         if (!struck && p >= STRIKE_AT) {
-            // Connect with the entity — the entity itself pops the hearts (never on air swings).
-            tryMeleeHit(SWORD_REACH, SWORD_HALF, SWORD_DMG);
+            // Connect with the entity — the entity itself pops the hearts (never on air swings). A
+            // descending mid-air strike crits for 1.5× and a heavier heart/spark burst.
+            boolean crit = critReady;
+            tryMeleeHit(SWORD_REACH, SWORD_HALF, meleeBaseDamage() * (crit ? CRIT_MULT : 1f), crit);
             struck = true;
         }
     }
@@ -369,43 +445,71 @@ public final class WeaponController implements Disposable {
         Node fistArm = weaponArm; // right hand only
         anchor.set(player.transform).mul(fistArm.globalTransform).translate(0f, -0.72f, 0f);
         anchor.getTranslation(tip);
-        // Connect with the entity — the entity itself pops the hearts.
-        tryMeleeHit(PUNCH_REACH, PUNCH_HALF, PUNCH_DMG);
+        // Connect with the entity — the entity itself pops the hearts. A descending mid-air punch crits.
+        boolean crit = critReady;
+        tryMeleeHit(PUNCH_REACH, PUNCH_HALF, meleeBaseDamage() * (crit ? CRIT_MULT : 1f), crit);
         struck = true;
     }
 
-    /** Launch a potato down the aim line from chest height. */
+    /**
+     * Fire a potato from the gun's muzzle: it flies dead straight (no arc) at muzzle height, passing
+     * through open air, then drops steeply once it has covered the reticle's range. The muzzle world
+     * position is read straight off the gun's model matrix (the flared barrel tip).
+     */
     private void fireGun() {
-        Potato p = null;
-        for (Potato cand : potatoes) if (!cand.alive) { p = cand; break; }
+        PotatoProjectile p = null;
+        for (PotatoProjectile cand : potatoes) if (!cand.isAlive()) { p = cand; break; }
         if (p == null) return;
+
+        // Muzzle = barrel-tip local point transformed by the live gun matrix.
+        buildGunMatrix(gunMat);
+        muzzlePos.set(WeaponModels.GUN_MUZZLE_X, WeaponModels.GUN_MUZZLE_Y, WeaponModels.GUN_MUZZLE_Z)
+            .mul(gunMat);
+
+        // Muzzle-clip guard: cast from the body/eye to the muzzle. If a wall sits between them the gun
+        // is poking through it — detonate on the wall surface (in the player's face) instead of firing
+        // the potato out the far side.
+        player.transform.getTranslation(eyePos);
+        eyePos.y += GUN_OFF_Y;
+        if (GridRaycast.firstHit(collider, eyePos, muzzlePos, muzzleHit)) {
+            p.spawnLanded(muzzleHit);
+            impactFx.burst(muzzleHit, 14);
+            return;
+        }
+
+        // Horizontal aim direction (matches the ground reticle).
         float fr = facingDeg * D2R;
         float fwdX = -MathUtils.sin(fr), fwdZ = -MathUtils.cos(fr);
-        p.alive = true;
-        p.travelled = 0f;
-        p.pos.set(aimX + fwdX * GUN_MUZZLE_OFFSET, GUN_FIRE_Y, aimZ + fwdZ * GUN_MUZZLE_OFFSET);
-        p.vel.set(fwdX, 0f, fwdZ).scl(GUN_SPEED);
+
+        // Level launch at the muzzle height; it drops steeply after travelling `range` blocks.
+        float range = Math.max(2f, CONE_GUN_RANGE - GUN_MUZZLE_OFFSET);
+        float vh = GUN_LAUNCH_SPEED;
+        launchVel.set(fwdX * vh, 0f, fwdZ * vh);
+
+        p.launch(muzzlePos, launchVel, range);
     }
 
     private void updatePotatoes(float delta) {
-        for (int i = 0; i < MAX_POTATO; i++) {
-            Potato p = potatoes[i];
-            if (!p.alive) continue;
-            p.pos.mulAdd(p.vel, delta);
-            p.travelled += GUN_SPEED * delta;
-            if (target != null) {
+        for (PotatoProjectile p : potatoes) {
+            if (!p.isAlive()) continue;
+            boolean impacted = p.update(delta, collider);
+            // Enemy hit while still flying (e.g. the training dummy) — pops hearts on the entity.
+            if (target != null && p.isFlying()) {
                 Vector3 tp = target.position();
-                float dx = tp.x - p.pos.x, dz = tp.z - p.pos.z;
-                float hr = target.radius() + 0.25f;
-                if (dx * dx + dz * dz < hr * hr && p.pos.y > 0.4f && p.pos.y < 2.1f) {
-                    hitDir.set(p.vel.x, 0f, p.vel.z).nor();
-                    target.onHit(GUN_DMG, hitDir); // entity pops the hearts on itself
-                    p.alive = false;
+                float dx = tp.x - p.position().x, dz = tp.z - p.position().z;
+                float hr = target.radius() + 0.3f;
+                if (dx * dx + dz * dz < hr * hr && p.position().y > 0.3f && p.position().y < 2.2f) {
+                    hitDir.set(dx, 0f, dz).nor();
+                    target.onHit(GUN_DMG, hitDir, false); // ranged shots don't crit
+                    impactFx.burst(p.position(), 12);
+                    p.destroy();
                     continue;
                 }
             }
-            if (p.travelled > GUN_RANGE || p.pos.y < 0f) p.alive = false; // de-spawn at max range
+            // Ground/wall impact this frame → splash dirt + potato chunks.
+            if (impacted) impactFx.burst(p.position(), 14);
         }
+        impactFx.update(delta);
     }
 
     public void updateVfx(float delta) {
@@ -413,15 +517,12 @@ public final class WeaponController implements Disposable {
         trail.update(delta);
     }
 
-    /** Held weapon (lit) + potato projectiles — call inside the main ModelBatch pass. */
+    /** Held weapon (lit) + potato projectiles + impact splash — call inside the main ModelBatch pass. */
     public void renderWorld(ModelBatch batch, Environment env) {
-        if (current == Weapon.SWORD) batch.render(sword, env);
+        if (current == Weapon.SWORD) batch.render(sword(), env);
         else if (current == Weapon.GUN) batch.render(gun, env);
-        for (int i = 0; i < MAX_POTATO; i++) {
-            if (!potatoes[i].alive) continue;
-            potatoFx[i].transform.setToTranslation(potatoes[i].pos);
-            batch.render(potatoFx[i], env);
-        }
+        for (PotatoProjectile p : potatoes) p.render(batch, env);
+        impactFx.render(batch, env);
     }
 
     /** Additive swoosh ribbon — call after ModelBatch.end(), before the HUD. */
@@ -433,7 +534,7 @@ public final class WeaponController implements Disposable {
 
     // ---- aim-cone shape for the ground reticle (DungeonGame reads these) ----
     private static final float CONE_SWORD_HALF = 68f, CONE_SWORD_RANGE = 3.6f;
-    private static final float CONE_GUN_HALF   = 7f,  CONE_GUN_RANGE   = 14f;
+    private static final float CONE_GUN_HALF   = 7f,  CONE_GUN_RANGE   = 9.1f; // 35% shorter than 14
     private static final float CONE_FIST_HALF  = 20f, CONE_FIST_RANGE  = 2.3f;
 
     /** Show the reticle while aiming the gun, or during a melee swing. */
@@ -459,9 +560,11 @@ public final class WeaponController implements Disposable {
 
     @Override
     public void dispose() {
-        swordAsset.dispose();
-        gunModel.dispose();
+        for (WeaponModels.SwordAsset a : swordAssets.values()) a.dispose();
+        gunAsset.dispose();
         potatoModel.dispose();
+        potatoTex.dispose();
+        impactFx.dispose();
         trail.dispose();
     }
 }

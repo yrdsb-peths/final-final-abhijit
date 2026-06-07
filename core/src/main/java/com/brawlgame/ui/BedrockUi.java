@@ -14,10 +14,10 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
  */
 public final class BedrockUi {
 
-    /** Panel fill — rgba(58,58,58,0.9), the Bedrock menu grey. */
-    public static final Color PANEL      = new Color(0.227f, 0.227f, 0.227f, 0.92f);
+    /** Panel fill — rgba(58,58,58,0.95), the Bedrock menu grey. */
+    public static final Color PANEL      = new Color(0.227f, 0.227f, 0.227f, 0.95f);
     /** Slightly lighter fill for an interactive slot/button at rest (#4A4A4A). */
-    public static final Color SLOT       = new Color(0.29f, 0.29f, 0.29f, 0.95f);
+    public static final Color SLOT       = new Color(0.29f, 0.29f, 0.29f, 1f);
     /** Hover fill for buttons. */
     public static final Color SLOT_HOVER = new Color(0.40f, 0.40f, 0.40f, 0.98f);
     /** A disabled/inactive control. */

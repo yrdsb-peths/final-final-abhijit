@@ -87,8 +87,8 @@ public final class SceneryRenderer implements Disposable {
 
     private void addSandProp(BlockLibrary lib, Random rng, float wx, float baseY, float wz) {
         switch (rng.nextInt(5)) {
-            case 0: // cactus, 1-3 blocks
-                add(lib.cubeModel("cactus_side.png", "cactus_top.png", 1f + rng.nextInt(3)), wx, baseY, wz);
+            case 0: // small decorative cactus sitting on the tier's flat top (narrower than a block)
+                add(lib.cactus(), wx, baseY, wz);
                 break;
             case 1: // skull / bone block
                 add(lib.cubeModel("bone_block_side.png", "bone_block_top.png", 1f), wx, baseY, wz);
@@ -100,8 +100,8 @@ public final class SceneryRenderer implements Disposable {
                 add(lib.cubeModel("tnt_side.png", "tnt_top.png", 1f), wx, baseY, wz);
                 add(lib.cubeModel("barrel_side.png", "barrel_top.png", 1f), wx, baseY + 1f, wz);
                 break;
-            default: // wooden minecart-track bed
-                add(lib.cubeModel("oak_planks.png", "rail.png", 0.12f), wx, baseY, wz);
+            default: // minecart rail laid flat on the tier (transparent — the block shows through)
+                add(lib.railDecal(), wx, baseY, wz);
                 break;
         }
     }

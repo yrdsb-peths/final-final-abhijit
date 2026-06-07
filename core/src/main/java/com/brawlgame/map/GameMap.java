@@ -121,6 +121,9 @@ public final class GameMap {
      */
     public boolean apply(int c, int r, BlockType t) {
         if (!inBounds(c, r)) return false;
+        // A map has exactly one spawn point: placing a new one clears any previous (in the same
+        // stroke, so undo restores it together).
+        if (t == BlockType.SPAWN) clearExistingSpawn(c, r);
         BlockType before = cells[c][r];
         boolean changed = (t == null || t.category() == BlockCategory.ERASER) ? erase(c, r) : place(c, r, t);
         if (changed) {
@@ -138,6 +141,30 @@ public final class GameMap {
             redoStack.clear();
         }
         stroke = null;
+    }
+
+    /** Erases any spawn cell other than (keepC,keepR), recording the change into the open stroke. */
+    private void clearExistingSpawn(int keepC, int keepR) {
+        for (int c = 0; c < cols; c++) {
+            for (int r = 0; r < rows; r++) {
+                if (cells[c][r] == BlockType.SPAWN && !(c == keepC && r == keepR)) {
+                    if (stroke == null) stroke = new ArrayList<>();
+                    stroke.add(new Edit(c, r, cells[c][r], null));
+                    cells[c][r] = null;
+                    dirty = true;
+                }
+            }
+        }
+    }
+
+    /** Grid coords {col,row} of the spawn point, or {@code null} if none is placed. */
+    public int[] findSpawn() {
+        for (int c = 0; c < cols; c++) {
+            for (int r = 0; r < rows; r++) {
+                if (cells[c][r] == BlockType.SPAWN) return new int[] {c, r};
+            }
+        }
+        return null;
     }
 
     public boolean canUndo() { return !undoStack.isEmpty(); }

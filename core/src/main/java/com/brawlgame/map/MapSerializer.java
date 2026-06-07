@@ -47,6 +47,12 @@ public final class MapSerializer {
         sb.append("SIZE ").append(map.size().id()).append('\n');
         sb.append("COLS ").append(map.cols()).append('\n');
         sb.append("ROWS ").append(map.rows()).append('\n');
+        // Exact world (x,y,z) of the spawn point, for the GameScreen to position the player.
+        int[] sp = map.findSpawn();
+        if (sp != null) {
+            sb.append("SPAWN ").append(map.worldX(sp[0])).append(' ').append(0f)
+                .append(' ').append(map.worldZ(sp[1])).append('\n');
+        }
         sb.append("# col row BLOCK_TYPE\n");
         for (int c = 0; c < map.cols(); c++) {
             for (int r = 0; r < map.rows(); r++) {

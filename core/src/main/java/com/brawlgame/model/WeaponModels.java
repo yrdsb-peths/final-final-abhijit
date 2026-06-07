@@ -19,6 +19,7 @@ import com.badlogic.gdx.graphics.g3d.utils.MeshPartBuilder;
 import com.badlogic.gdx.graphics.g3d.utils.MeshPartBuilder.VertexInfo;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.graphics.g3d.utils.shapebuilders.BoxShapeBuilder;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.utils.Disposable;
 import com.badlogic.gdx.utils.JsonReader;
 import com.badlogic.gdx.utils.JsonValue;
@@ -32,8 +33,10 @@ import com.badlogic.gdx.utils.JsonValue;
  */
 public final class WeaponModels {
 
-    /** Distance from the grip origin to the gun muzzle (world units). */
-    public static final float GUN_MUZZLE_Z = 0.48f;
+    /** The muzzle (front of the flared barrel) in the gun model's LOCAL space — projectiles spawn here. */
+    public static final float GUN_MUZZLE_X = 0f;
+    public static final float GUN_MUZZLE_Y = 0.02f;
+    public static final float GUN_MUZZLE_Z = -0.63f; // forward is -Z; flared-mouth tip
 
     // ---- sword bake (raw glTF model → held-item local space) ----
     private static final String SWORD_GLTF = "models/minecraft_swords/scene.gltf";
@@ -239,34 +242,149 @@ public final class WeaponModels {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Gun (unchanged blocky potato gun)
+    // Potato gun — a detailed, multi-part textured voxel launcher (iron barrel + dark-oak stock)
     // ------------------------------------------------------------------------------------------
 
-    /** A blocky two-handed "potato gun": tan body, darker barrel, a drop-down grip. */
-    public static Model buildGun() {
+    /** A built gun: the model plus the textures it owns (disposed together). */
+    public static final class GunAsset implements Disposable {
+        public final Model model;
+        public final Texture iron, wood, gold;
+
+        private GunAsset(Model model, Texture iron, Texture wood, Texture gold) {
+            this.model = model;
+            this.iron = iron;
+            this.wood = wood;
+            this.gold = gold;
+        }
+
+        @Override
+        public void dispose() {
+            model.dispose();
+            iron.dispose();
+            wood.dispose();
+            gold.dispose();
+        }
+    }
+
+    /**
+     * Builds the heavy Minecraft-style potato launcher from textured voxel parts, matching the
+     * official toy: a flared iron blunderbuss barrel (stepped horn muzzle), a dark-oak-plank receiver
+     * with a chest/hopper loader on top, brass (gold-block) banding straps, and a drop-down grip.
+     * Forward is -Z; the flared mouth tip is at {@link #GUN_MUZZLE_Z}. Each face maps its texture 0..1.
+     */
+    public static GunAsset buildGun() {
+        // Dark forged metal (not the light iron_block, which read as white under the daylight rig).
+        Texture iron = blockTex("textures/blocks/netherite_block.png");
+        Texture wood = blockTex("textures/blocks/dark_oak_planks.png");
+        Texture gold = blockTex("textures/blocks/gold_block.png");
+        long attrs = Usage.Position | Usage.Normal | Usage.TextureCoordinates;
+
         ModelBuilder mb = new ModelBuilder();
         mb.begin();
 
-        part(mb, "body", new Color(0.62f, 0.49f, 0.32f, 1f),
-            0f, 0f, -0.04f, 0.13f, 0.15f, 0.34f);
-        part(mb, "barrel", new Color(0.34f, 0.28f, 0.20f, 1f),
-            0f, 0.01f, -0.34f, 0.09f, 0.09f, 0.30f);
-        part(mb, "muzzle", new Color(0.18f, 0.16f, 0.13f, 1f),
-            0f, 0.01f, -0.47f, 0.11f, 0.11f, 0.04f);
-        part(mb, "grip", new Color(0.30f, 0.22f, 0.14f, 1f),
-            0f, -0.13f, 0.07f, 0.08f, 0.18f, 0.09f);
-        part(mb, "stock", new Color(0.52f, 0.40f, 0.26f, 1f),
-            0f, -0.06f, -0.20f, 0.10f, 0.08f, 0.12f);
+        // Iron: barrel neck + a 3-ring flared horn muzzle (widening toward the front).
+        MeshPartBuilder ironP = mb.part("iron", GL20.GL_TRIANGLES, attrs, gunMat(iron));
+        box(ironP, 0f, 0.02f, -0.26f, 0.10f, 0.10f, 0.34f); // barrel neck
+        box(ironP, 0f, 0.02f, -0.46f, 0.16f, 0.16f, 0.06f); // flare ring 1
+        box(ironP, 0f, 0.02f, -0.53f, 0.24f, 0.24f, 0.07f); // flare ring 2
+        box(ironP, 0f, 0.02f, -0.60f, 0.34f, 0.34f, 0.06f); // flared mouth (muzzle)
 
+        // Dark-oak: receiver body, chest/hopper on top, drop-down grip.
+        MeshPartBuilder woodP = mb.part("wood", GL20.GL_TRIANGLES, attrs, gunMat(wood));
+        box(woodP, 0f, 0.00f, 0.00f, 0.16f, 0.18f, 0.28f); // receiver body
+        box(woodP, 0f, 0.17f, 0.00f, 0.18f, 0.14f, 0.18f); // chest / hopper loader
+        box(woodP, 0f, -0.16f, 0.10f, 0.08f, 0.20f, 0.10f); // trigger grip
+
+        // Brass banding straps.
+        MeshPartBuilder goldP = mb.part("gold", GL20.GL_TRIANGLES, attrs, gunMat(gold));
+        box(goldP, 0f, 0.02f, -0.12f, 0.13f, 0.13f, 0.03f); // body→barrel collar
+        box(goldP, 0f, 0.02f, -0.30f, 0.12f, 0.12f, 0.03f); // mid-barrel band
+        box(goldP, 0f, 0.215f, 0.00f, 0.19f, 0.03f, 0.19f); // chest top strap
+        box(goldP, 0f, 0.125f, 0.00f, 0.19f, 0.03f, 0.19f); // chest bottom strap
+
+        return new GunAsset(mb.end(), iron, wood, gold);
+    }
+
+    private static Material gunMat(Texture tex) {
+        return new Material(TextureAttribute.createDiffuse(tex), IntAttribute.createCullFace(GL20.GL_BACK));
+    }
+
+    /**
+     * The potato projectile mesh: a small 3D box (0.24 × 0.24 × 0.36, longer down the Z/travel axis —
+     * 40% smaller than the old box) textured with a clean procedural potato skin (no black borders).
+     * The caller owns {@code tex}'s lifecycle.
+     */
+    public static Model buildPotatoBox(Texture tex) {
+        Material mat = new Material("potato",
+            TextureAttribute.createDiffuse(tex), IntAttribute.createCullFace(GL20.GL_BACK));
+        ModelBuilder mb = new ModelBuilder();
+        mb.begin();
+        MeshPartBuilder b = mb.part("potato", GL20.GL_TRIANGLES,
+            Usage.Position | Usage.Normal | Usage.TextureCoordinates, mat);
+        box(b, 0f, 0f, 0f, 0.24f, 0.24f, 0.36f);
         return mb.end();
     }
 
-    /** Adds one axis-aligned coloured box centred at (cx,cy,cz) with size (w,h,d). */
-    private static void part(ModelBuilder mb, String id, Color color,
-                             float cx, float cy, float cz, float w, float h, float d) {
-        Material mat = new Material(ColorAttribute.createDiffuse(color));
-        MeshPartBuilder b = mb.part(id, GL20.GL_TRIANGLES,
-            Usage.Position | Usage.Normal, mat);
-        BoxShapeBuilder.build(b, cx, cy, cz, w, h, d);
+    /**
+     * Procedurally builds the potato skin: a solid tan base (edge-to-edge, so no black sides) with a
+     * subtle vertical shade and a few darker "eye" speckles. Replaces the old photo PNG. Caller owns it.
+     */
+    public static Texture buildPotatoTexture() {
+        int size = 16;
+        com.badlogic.gdx.graphics.Pixmap pm =
+            new com.badlogic.gdx.graphics.Pixmap(size, size, com.badlogic.gdx.graphics.Pixmap.Format.RGBA8888);
+        for (int y = 0; y < size; y++) {
+            // Gentle top-light → bottom-shade gradient across the tan base.
+            float t = y / (float) (size - 1);
+            float r = MathUtils.lerp(0.82f, 0.60f, t);
+            float g = MathUtils.lerp(0.64f, 0.45f, t);
+            float bl = MathUtils.lerp(0.40f, 0.27f, t);
+            for (int x = 0; x < size; x++) pm.drawPixel(x, y, Color.rgba8888(r, g, bl, 1f));
+        }
+        // A handful of darker-brown eyes/speckles for a spud-like look.
+        int eye = Color.rgba8888(0.40f, 0.28f, 0.16f, 1f);
+        int[][] eyes = {{4, 5}, {10, 4}, {6, 11}, {12, 10}, {3, 12}};
+        for (int[] e : eyes) pm.drawPixel(e[0], e[1], eye);
+
+        Texture tex = new Texture(pm);
+        tex.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
+        pm.dispose();
+        return tex;
+    }
+
+    private static Texture blockTex(String path) {
+        Texture t = new Texture(Gdx.files.internal(path));
+        t.setFilter(TextureFilter.Nearest, TextureFilter.Nearest);
+        return t;
+    }
+
+    // Reusable vertex scratch for the textured-box helper.
+    private static final VertexInfo G0 = new VertexInfo();
+    private static final VertexInfo G1 = new VertexInfo();
+    private static final VertexInfo G2 = new VertexInfo();
+    private static final VertexInfo G3 = new VertexInfo();
+
+    /** Adds one axis-aligned textured box centred at (cx,cy,cz), each face mapping the texture 0..1. */
+    private static void box(MeshPartBuilder b, float cx, float cy, float cz, float w, float h, float d) {
+        float x0 = cx - w * 0.5f, x1 = cx + w * 0.5f;
+        float y0 = cy - h * 0.5f, y1 = cy + h * 0.5f;
+        float z0 = cz - d * 0.5f, z1 = cz + d * 0.5f;
+        gface(b, x0, y1, z0, x1, y1, z0, x1, y0, z0, x0, y0, z0, 0, 0, -1); // front -Z
+        gface(b, x1, y1, z1, x0, y1, z1, x0, y0, z1, x1, y0, z1, 0, 0,  1); // back +Z
+        gface(b, x0, y1, z1, x0, y1, z0, x0, y0, z0, x0, y0, z1, -1, 0, 0); // left -X
+        gface(b, x1, y1, z0, x1, y1, z1, x1, y0, z1, x1, y0, z0, 1, 0, 0);  // right +X
+        gface(b, x0, y1, z1, x1, y1, z1, x1, y1, z0, x0, y1, z0, 0, 1, 0);  // top +Y
+        gface(b, x0, y0, z0, x1, y0, z0, x1, y0, z1, x0, y0, z1, 0, -1, 0); // bottom -Y
+    }
+
+    private static void gface(MeshPartBuilder b,
+                              float ax, float ay, float az, float bx, float by, float bz,
+                              float ccx, float ccy, float ccz, float dx, float dy, float dz,
+                              float nx, float ny, float nz) {
+        G0.setPos(ax, ay, az).setNor(nx, ny, nz).setUV(0f, 0f).setCol(Color.WHITE);
+        G1.setPos(bx, by, bz).setNor(nx, ny, nz).setUV(1f, 0f).setCol(Color.WHITE);
+        G2.setPos(ccx, ccy, ccz).setNor(nx, ny, nz).setUV(1f, 1f).setCol(Color.WHITE);
+        G3.setPos(dx, dy, dz).setNor(nx, ny, nz).setUV(0f, 1f).setCol(Color.WHITE);
+        b.rect(G0, G1, G2, G3);
     }
 }

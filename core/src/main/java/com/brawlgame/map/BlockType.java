@@ -30,7 +30,8 @@ public enum BlockType {
 
     // ---- Shared specials ----
     CHEST  (BlockCategory.CHEST, "Chest",       0f, null),
-    SPAWN  (BlockCategory.SPAWN, "Spawn Point", 0f, new Color(0.95f, 0.20f, 0.25f, 0.7f)),
+    SPAWN  (BlockCategory.SPAWN, "Spawn Point", 0f, new Color(0.20f, 0.90f, 0.32f, 0.8f)), // green pad
+
     ERASER (BlockCategory.ERASER,"Eraser",      0f, null);
 
     private final BlockCategory category;

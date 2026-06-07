@@ -18,6 +18,7 @@ public interface CombatTarget {
      * Register an impact.
      * @param damage    damage dealt (visual only for the training dummy)
      * @param fromDir   normalised horizontal direction the hit came FROM → TO the target (for knockback/tilt)
+     * @param crit      true if this was a critical hit (heavier visual feedback)
      */
-    void onHit(float damage, Vector3 fromDir);
+    void onHit(float damage, Vector3 fromDir, boolean crit);
 }

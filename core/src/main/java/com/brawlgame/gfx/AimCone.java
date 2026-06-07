@@ -49,7 +49,7 @@ public final class AimCone implements Disposable {
         fill = mesh(SEG * 3);
         lines = mesh(SEG * 2 + 4 + 3 * SEG * 2);
         rectFill = mesh(6);                       // two triangles
-        rectLines = mesh(4 + RUNGS * 2);          // two side rails + ladder rungs
+        rectLines = mesh((4 + RUNGS) * 2);        // four border edges + ladder rungs
         shader = new ShaderProgram(VERT, FRAG);
         if (!shader.isCompiled()) throw new IllegalStateException("AimCone shader: " + shader.getLog());
     }
@@ -133,29 +133,30 @@ public final class AimCone implements Disposable {
 
     /**
      * Rebuild the rectangular gun reticle only when its shape (half-width / range) changes. A long,
-     * narrow strip projecting straight forward along -Z, flat on y=0. The colour tapers from a bright
-     * near end to alpha 0 exactly at the far (range) end so it vanishes cleanly at max range.
+     * narrow strip projecting straight forward along -Z, flat on y=0. It shares the <b>sword sector's
+     * palette and additive glow</b> — a soft translucent white→blue fill (bright near, faint far), a
+     * bright white rim, and faint "sonar" cross-rungs (the rectangle's analogue of the sword's
+     * concentric arcs) — just kept rectangular instead of a fanned-out sector.
      */
     private void configureRect(float halfWidth, float range) {
         if (halfWidth == curRectHalf && range == curRectRange) return;
         curRectHalf = halfWidth;
         curRectRange = range;
 
-        // Fill: brighter near the player, fully transparent at the far cutoff.
+        // Same colours as the sword sector.
         final float fillNear = Color.toFloatBits(1f, 1f, 1f, 0.22f);
-        final float fillFar = Color.toFloatBits(0.8f, 0.9f, 1f, 0f); // alpha 0 at maxRange
-        // Rails: bright rim that also fades out to 0 at the far end (no hard bright bar).
-        final float railNear = Color.toFloatBits(1f, 1f, 1f, 0.85f);
-        final float railFar = Color.toFloatBits(0.85f, 0.92f, 1f, 0f);
+        final float fillFar  = Color.toFloatBits(0.8f, 0.9f, 1f, 0.04f);
+        final float rim      = Color.toFloatBits(1f, 1f, 1f, 0.85f);
+        final float rung     = Color.toFloatBits(0.85f, 0.92f, 1f, 0.5f);
 
         float[] f = new float[6 * FPV];
-        float[] l = new float[(4 + RUNGS * 2) * FPV];
+        float[] l = new float[(4 + RUNGS) * 2 * FPV];
         int fi = 0, li = 0;
 
-        // Forward is -Z; the far edge sits at z = -range, the near edge at z = 0.
+        // Forward is -Z; the far edge sits exactly at z = -range, the near edge at z = 0.
         float nz = 0f, fz = -range;
 
-        // Two triangles forming the strip (near-left, near-right, far-left, far-right).
+        // Two triangles forming the filled strip — bright at the near edge, fading toward the far edge.
         fi = put(f, fi, -halfWidth, nz, fillNear);
         fi = put(f, fi,  halfWidth, nz, fillNear);
         fi = put(f, fi,  halfWidth, fz, fillFar);
@@ -163,20 +164,15 @@ public final class AimCone implements Disposable {
         fi = put(f, fi,  halfWidth, fz, fillFar);
         fi = put(f, fi, -halfWidth, fz, fillFar);
 
-        // Side rails (both fade to 0 at the far end).
-        li = put(l, li, -halfWidth, nz, railNear);
-        li = put(l, li, -halfWidth, fz, railFar);
-        li = put(l, li,  halfWidth, nz, railNear);
-        li = put(l, li,  halfWidth, fz, railFar);
-
-        // Ladder rungs across the strip, dimming toward the cutoff (skip a rung exactly at range).
+        // Bright rectangular rim (left, right, near, far edges).
+        li = put(l, li, -halfWidth, nz, rim); li = put(l, li, -halfWidth, fz, rim); // left
+        li = put(l, li,  halfWidth, nz, rim); li = put(l, li,  halfWidth, fz, rim); // right
+        li = put(l, li, -halfWidth, nz, rim); li = put(l, li,  halfWidth, nz, rim); // near
+        li = put(l, li, -halfWidth, fz, rim); li = put(l, li,  halfWidth, fz, rim); // far
+        // Faint sonar cross-rungs along the length.
         for (int k = 1; k <= RUNGS; k++) {
-            float t = k / (float) (RUNGS + 1);          // 0..1 along the length
-            float z = -range * t;
-            float a = 0.5f * (1f - t);                   // fades to ~0 near the far end
-            float rung = Color.toFloatBits(0.85f, 0.92f, 1f, a);
-            li = put(l, li, -halfWidth, z, rung);
-            li = put(l, li,  halfWidth, z, rung);
+            float z = -range * (k / (float) (RUNGS + 1));
+            li = put(l, li, -halfWidth, z, rung); li = put(l, li, halfWidth, z, rung);
         }
 
         rectFillVerts = fi / FPV;
@@ -186,8 +182,8 @@ public final class AimCone implements Disposable {
     }
 
     /**
-     * Draw the long, narrow gun reticle: a straight strip of width {@code 2*halfWidth} projecting
-     * forward along the aim line, fading cleanly to alpha 0 at {@code range} (max range).
+     * Draw the gun reticle: a soft, additive translucent rectangular glow projecting forward along the
+     * aim line and ending at {@code range} — same look as the sword sector, kept rectangular.
      */
     public void renderRect(Camera camera, float px, float pz, float facingDeg, float halfWidth, float range) {
         configureRect(halfWidth, range);
@@ -198,7 +194,7 @@ public final class AimCone implements Disposable {
         Gdx.gl.glEnable(GL20.GL_DEPTH_TEST);
         Gdx.gl.glDepthMask(false);
         Gdx.gl.glEnable(GL20.GL_BLEND);
-        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE); // additive
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE); // additive, like the sword sector
 
         shader.bind();
         shader.setUniformMatrix("u_proj", mvp);

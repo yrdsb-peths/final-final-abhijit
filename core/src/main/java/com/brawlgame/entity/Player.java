@@ -11,8 +11,14 @@ import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
+import java.util.function.Supplier;
+
 import com.badlogic.gdx.utils.Disposable;
+import com.brawlgame.combat.ArmorStats;
+import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
+import com.brawlgame.item.Inventory;
+import com.brawlgame.item.ItemType;
 import com.brawlgame.model.MinecraftPlayerModel;
 import com.brawlgame.model.PlayerAnimator;
 
@@ -47,7 +53,10 @@ public final class Player implements Disposable {
     private static final float TURN_RATE = 16f;
 
     // ---- hitbox / eye height (blocks) ----
-    public static final float HITBOX_W = 0.6f;
+    // Slightly wider than the vanilla 0.6 as a failsafe: keeps the body far enough off a 1-block wall
+    // that the (now larger) gun muzzle can't be shoved completely through it. The muzzle-spawn raycast
+    // in WeaponController is the real guard; this just stops the player pressing flush in the first place.
+    public static final float HITBOX_W = 0.72f;
     public static final float STAND_H = 1.8f, SNEAK_H = 1.5f;
     public static final float STAND_EYE = 1.62f, SNEAK_EYE = 1.27f;
 
@@ -70,6 +79,17 @@ public final class Player implements Disposable {
 
     private final Vector3 wish = new Vector3(); // normalised world move direction this frame
 
+    private BlockCollider collider; // optional: solid grid for movement collision (null = flat void)
+    private Supplier<ItemType> heldItemSupplier; // reads the selected hotbar item each tick (null = fists)
+
+    // ---- health + armour-reduced damage ----
+    private static final float MAX_HEALTH = 20f;     // 10 hearts, vanilla
+    private static final float REGEN_RATE = 1f;      // HP/sec recovered when not recently hit
+    private static final float REGEN_DELAY = 1.5f;   // seconds after a hit before regen resumes
+    private float health = MAX_HEALTH;
+    private float regenCooldown = 0f;
+    private Inventory inventory; // worn armour is read from here for the reduction formula
+
     public Player(Texture skin) {
         model = MinecraftPlayerModel.build(skin);
         instance = new ModelInstance(model);
@@ -79,8 +99,57 @@ public final class Player implements Disposable {
         applyTransform();
     }
 
+    /**
+     * Binds the player's active weapon to the hotbar: each tick {@link #update} pulls the selected
+     * item from this supplier and equips the matching weapon (no hardcoded weapon keys).
+     */
+    public void setHeldItemSupplier(Supplier<ItemType> supplier) {
+        this.heldItemSupplier = supplier;
+    }
+
+    /** Binds the inventory whose four armour slots feed the Minecraft damage-reduction formula. */
+    public void setInventory(Inventory inventory) {
+        this.inventory = inventory;
+    }
+
+    /**
+     * Take {@code raw} incoming damage, reduced by the currently worn armour (vanilla Java formula).
+     * Pauses regen briefly; if health is depleted the player respawns at the origin with full health.
+     */
+    public void applyDamage(float raw) {
+        float dmg = inventory != null ? ArmorStats.reduce(raw, inventory) : raw;
+        health = Math.max(0f, health - dmg);
+        regenCooldown = REGEN_DELAY;
+        if (health <= 0f) {
+            health = MAX_HEALTH;
+            setSpawn(0f, 0f); // respawn at the arena origin
+        }
+    }
+
+    public float getHealth()    { return health; }
+    public float getMaxHealth() { return MAX_HEALTH; }
+
+    /** Supplies the solid grid for movement collision (and forwards it to the weapon for projectiles). */
+    public void setCollider(BlockCollider collider) {
+        this.collider = collider;
+        weapon.setCollider(collider);
+    }
+
+    /** Places the player on the ground at (x,z) — used to spawn at a loaded map's spawn point. */
+    public void setSpawn(float x, float z) {
+        pos.set(x, 0f, z);
+        prevPos.set(pos);
+        renderPos.set(pos);
+        vx = vy = vz = 0f;
+        onGround = true;
+        applyTransform();
+    }
+
     public void update(float delta, Camera camera) {
         readInput();
+        // The active weapon (and the sword material/model) is pulled from the selected hotbar slot
+        // every tick — iron sword → iron model, diamond → diamond, empty → fists. No hardcoded keys.
+        if (heldItemSupplier != null) weapon.setHeldItem(heldItemSupplier.get());
         weapon.handleInput();
 
         // fixed-step physics with leftover-time interpolation
@@ -100,10 +169,15 @@ public final class Player implements Disposable {
 
         float speed = (float) Math.sqrt(vx * vx + vz * vz) * 20f; // blocks/s
         weapon.setAim(renderPos.x, renderPos.z, facingDeg); // for melee arc/hit tests
+        weapon.setCritReady(!onGround && vy < 0f);           // airborne + descending → next hit crits
         weapon.updatePose(delta, armPose);
         animator.update(delta, speed, sprinting, sneaking, onGround, armPose);
         weapon.postAnimate();   // skeleton is now current → anchor weapon, trace trail, fire sparks
         weapon.updateVfx(delta);
+
+        // Slow health regen once a moment has passed since the last hit (step off the hazard to recover).
+        if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
+        else if (health < MAX_HEALTH) health = Math.min(MAX_HEALTH, health + REGEN_RATE * delta);
     }
 
     private void readInput() {
@@ -147,10 +221,13 @@ public final class Player implements Disposable {
         vx += wish.x * accel;
         vz += wish.z * accel;
 
-        // integrate
+        // integrate — resolve horizontal collisions per-axis so sliding along walls feels natural;
+        // vertical (jumps) is unaffected since the arena has no ceilings.
         pos.x += vx;
-        pos.y += vy;
+        if (collider != null) resolveAxisX();
         pos.z += vz;
+        if (collider != null) resolveAxisZ();
+        pos.y += vy;
 
         // gravity for the next tick (applied after the move, like Minecraft)
         vy = (vy - GRAVITY) * DRAG_Y;
@@ -162,6 +239,50 @@ public final class Player implements Disposable {
             onGround = true;
         } else {
             onGround = false;
+        }
+    }
+
+    /** Push the player out of any solid cell it now overlaps along X, and kill X velocity there. */
+    private void resolveAxisX() {
+        float half = HITBOX_W * 0.5f;
+        float cellHalf = collider.cellSize() * 0.5f;
+        float minZ = pos.z - half, maxZ = pos.z + half;
+        int r0 = collider.rowAt(minZ), r1 = collider.rowAt(maxZ);
+        for (int r = r0; r <= r1; r++) {
+            int c0 = collider.colAt(pos.x - half), c1 = collider.colAt(pos.x + half);
+            for (int c = c0; c <= c1; c++) {
+                if (collider.collisionHeightAt(c, r) <= pos.y + 0.05f) continue;
+                float cMinX = collider.cellCenterX(c) - cellHalf, cMaxX = collider.cellCenterX(c) + cellHalf;
+                float cMinZ = collider.cellCenterZ(r) - cellHalf, cMaxZ = collider.cellCenterZ(r) + cellHalf;
+                if (pos.x + half <= cMinX || pos.x - half >= cMaxX) continue;
+                if (pos.z + half <= cMinZ || pos.z - half >= cMaxZ) continue;
+                if (vx > 0f) pos.x = cMinX - half;
+                else if (vx < 0f) pos.x = cMaxX + half;
+                else pos.x += (pos.x < collider.cellCenterX(c)) ? (cMinX - half - pos.x) : (cMaxX + half - pos.x);
+                vx = 0f;
+            }
+        }
+    }
+
+    /** Push the player out of any solid cell it now overlaps along Z, and kill Z velocity there. */
+    private void resolveAxisZ() {
+        float half = HITBOX_W * 0.5f;
+        float cellHalf = collider.cellSize() * 0.5f;
+        float minX = pos.x - half, maxX = pos.x + half;
+        int c0 = collider.colAt(minX), c1 = collider.colAt(maxX);
+        for (int c = c0; c <= c1; c++) {
+            int r0 = collider.rowAt(pos.z - half), r1 = collider.rowAt(pos.z + half);
+            for (int r = r0; r <= r1; r++) {
+                if (collider.collisionHeightAt(c, r) <= pos.y + 0.05f) continue;
+                float cMinX = collider.cellCenterX(c) - cellHalf, cMaxX = collider.cellCenterX(c) + cellHalf;
+                float cMinZ = collider.cellCenterZ(r) - cellHalf, cMaxZ = collider.cellCenterZ(r) + cellHalf;
+                if (pos.x + half <= cMinX || pos.x - half >= cMaxX) continue;
+                if (pos.z + half <= cMinZ || pos.z - half >= cMaxZ) continue;
+                if (vz > 0f) pos.z = cMinZ - half;
+                else if (vz < 0f) pos.z = cMaxZ + half;
+                else pos.z += (pos.z < collider.cellCenterZ(r)) ? (cMinZ - half - pos.z) : (cMaxZ + half - pos.z);
+                vz = 0f;
+            }
         }
     }
 

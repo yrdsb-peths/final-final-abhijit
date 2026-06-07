@@ -59,6 +59,10 @@ public final class BlockLibrary implements Disposable {
     private final Map<String, Model> decoModels = new HashMap<>();
     // The two checkerboard floor tile models (lazily built on first use). Disposed in dispose().
     private Model floorA, floorB;
+    // Flat transparent minecart-rail decal (lazily built). Disposed in dispose().
+    private Model railModel;
+    // Small decorative cactus prop (lazily built). Disposed in dispose().
+    private Model cactusModel;
 
     private final ModelBuilder mb = new ModelBuilder();
 
@@ -97,35 +101,25 @@ public final class BlockLibrary implements Disposable {
     }
 
     /**
-     * One flat, lit, opaque 1x1 floor tile at cell centre ({@code worldX},{@code worldZ}). The board
-     * is paved in a two-tone checkerboard ({@code alt} selects the A/B texture) for a high-fidelity
-     * ground: Sand = sand + cut sandstone; Deep Dark = deepslate bricks + polished deepslate.
+     * One solid 1x1 base-layer floor block spanning y = -1 .. 0 at cell centre
+     * ({@code worldX},{@code worldZ}); its top face sits at y=0 where placed blocks rest. The board is
+     * paved in a two-tone checkerboard ({@code alt} selects the A/B texture): Sand = sand + cut
+     * (smooth) sandstone; Deep Dark = polished deepslate + deepslate bricks. Being full cubes, they
+     * read correctly from the top-down camera (a single up-facing quad was being back-face culled).
      */
     public ModelInstance floorTile(boolean alt, float worldX, float worldZ) {
         if (floorA == null) buildFloorTiles();
         ModelInstance inst = new ModelInstance(alt ? floorB : floorA);
-        inst.transform.setToTranslation(worldX, 0f, worldZ);
+        inst.transform.setToTranslation(worldX, -1f, worldZ); // base layer one block below the surface
         return inst;
     }
 
     private void buildFloorTiles() {
         boolean sand = theme != Theme.DEEP_DARK;
-        floorA = buildFloorQuad(sand ? "sand.png" : "deepslate_bricks.png");
-        floorB = buildFloorQuad(sand ? "cut_sandstone.png" : "polished_deepslate.png");
-    }
-
-    private Model buildFloorQuad(String file) {
-        Material mat = opaque(file);
-        float hw = CELL * 0.5f;
-        mb.begin();
-        MeshPartBuilder p = mb.part("floor", GL20.GL_TRIANGLES,
-            Usage.Position | Usage.Normal | Usage.TextureCoordinates, mat);
-        T0.setPos(-hw, 0f, -hw).setNor(0f, 1f, 0f).setUV(0f, 0f).setCol(Color.WHITE);
-        T1.setPos( hw, 0f, -hw).setNor(0f, 1f, 0f).setUV(1f, 0f).setCol(Color.WHITE);
-        T2.setPos( hw, 0f,  hw).setNor(0f, 1f, 0f).setUV(1f, 1f).setCol(Color.WHITE);
-        T3.setPos(-hw, 0f,  hw).setNor(0f, 1f, 0f).setUV(0f, 1f).setCol(Color.WHITE);
-        p.rect(T0, T1, T2, T3);
-        return mb.end();
+        String a = sand ? "sand.png" : "polished_deepslate.png";
+        String b = sand ? "cut_sandstone.png" : "deepslate_bricks.png";
+        floorA = buildCube(a, a, 1f);
+        floorB = buildCube(b, b, 1f);
     }
 
     /**
@@ -203,6 +197,66 @@ public final class BlockLibrary implements Disposable {
         return mb.end();
     }
 
+    /**
+     * A flat, transparent minecart-rail decal: a single 1x1 up-facing quad textured with rail.png,
+     * alpha-blended so the block beneath shows through the gaps (rather than rendering black). Sits
+     * just above y=0 so it lays on top of the tier it's placed on; drawn in the transparent pass.
+     */
+    public Model railDecal() {
+        if (railModel == null) {
+            Material mat = new Material("rail",
+                TextureAttribute.createDiffuse(tex("rail.png")),
+                new BlendingAttribute(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA),
+                FloatAttribute.createAlphaTest(0.05f),
+                IntAttribute.createCullFace(GL20.GL_NONE));
+            float hw = CELL * 0.5f, y = 0.02f;
+            mb.begin();
+            MeshPartBuilder p = mb.part("rail", GL20.GL_TRIANGLES,
+                Usage.Position | Usage.Normal | Usage.TextureCoordinates, mat);
+            T0.setPos(-hw, y,  hw).setNor(0f, 1f, 0f).setUV(0f, 0f).setCol(Color.WHITE);
+            T1.setPos( hw, y,  hw).setNor(0f, 1f, 0f).setUV(1f, 0f).setCol(Color.WHITE);
+            T2.setPos( hw, y, -hw).setNor(0f, 1f, 0f).setUV(1f, 1f).setCol(Color.WHITE);
+            T3.setPos(-hw, y, -hw).setNor(0f, 1f, 0f).setUV(0f, 1f).setCol(Color.WHITE);
+            p.rect(T0, T1, T2, T3);
+            railModel = mb.end();
+        }
+        return railModel;
+    }
+
+    /**
+     * A small decorative cactus prop for sand-tier tops: a narrow box (0.7 wide, base at y=0,
+     * ~1.1 tall — distinctly smaller than a 1x1 terrain block) textured with the vanilla cactus
+     * textures (green spiky sides + cactus top), alpha-tested so its transparent edge pixels don't
+     * render as black. Sits on the flat top face of the tier it's placed on.
+     */
+    public Model cactus() {
+        if (cactusModel == null) {
+            Material sideMat = new Material("cactusSide",
+                TextureAttribute.createDiffuse(tex("cactus_side.png")),
+                FloatAttribute.createAlphaTest(0.5f),
+                IntAttribute.createCullFace(GL20.GL_BACK));
+            Material topMat = new Material("cactusTop",
+                TextureAttribute.createDiffuse(tex("cactus_top.png")),
+                FloatAttribute.createAlphaTest(0.5f),
+                IntAttribute.createCullFace(GL20.GL_BACK));
+
+            float hw = 0.35f, y0 = 0f, y1 = 1.1f; // 0.7 wide, 1.1 tall
+            mb.begin();
+            MeshPartBuilder sb = mb.part("cactus_sides", GL20.GL_TRIANGLES,
+                Usage.Position | Usage.Normal | Usage.TextureCoordinates, sideMat);
+            faceTiled(sb, -hw, y1, -hw,  hw, y1, -hw,  hw, y0, -hw, -hw, y0, -hw, 0, 0, -1, 1, 1);
+            faceTiled(sb,  hw, y1,  hw, -hw, y1,  hw, -hw, y0,  hw,  hw, y0,  hw, 0, 0,  1, 1, 1);
+            faceTiled(sb, -hw, y1,  hw, -hw, y1, -hw, -hw, y0, -hw, -hw, y0,  hw, -1, 0, 0, 1, 1);
+            faceTiled(sb,  hw, y1, -hw,  hw, y1,  hw,  hw, y0,  hw,  hw, y0, -hw, 1, 0, 0, 1, 1);
+            MeshPartBuilder tb = mb.part("cactus_cap", GL20.GL_TRIANGLES,
+                Usage.Position | Usage.Normal | Usage.TextureCoordinates, topMat);
+            faceTiled(tb, -hw, y1,  hw,  hw, y1,  hw,  hw, y1, -hw, -hw, y1, -hw, 0, 1, 0, 1, 1);
+            faceTiled(tb, -hw, y0, -hw,  hw, y0, -hw,  hw, y0,  hw, -hw, y0,  hw, 0, -1, 0, 1, 1);
+            cactusModel = mb.end();
+        }
+        return cactusModel;
+    }
+
     /** Loads (once) and returns a Nearest-filtered block texture — exposed for decorative scenery. */
     public Texture texture(String file) {
         return tex(file);
@@ -238,7 +292,11 @@ public final class BlockLibrary implements Disposable {
         decoModels.clear();
         if (floorA != null) floorA.dispose();
         if (floorB != null) floorB.dispose();
+        if (railModel != null) railModel.dispose();
+        if (cactusModel != null) cactusModel.dispose();
         floorA = floorB = null;
+        railModel = null;
+        cactusModel = null;
         for (Texture t : textures.values()) t.dispose();
         textures.clear();
     }
@@ -523,10 +581,15 @@ public final class BlockLibrary implements Disposable {
 
     // ------------------------------------------------------------------ texture / material helpers
 
-    /** An opaque, lit, back-face-culled material textured by the named block PNG. */
+    /**
+     * An opaque, lit, back-face-culled material textured by the named block PNG. An alpha test is
+     * included so block textures with transparent border pixels (e.g. cactus, rails) discard those
+     * texels instead of drawing them as black edges. Fully-opaque textures are unaffected.
+     */
     private Material opaque(String file) {
         return new Material(file,
             TextureAttribute.createDiffuse(tex(file)),
+            FloatAttribute.createAlphaTest(0.5f),
             IntAttribute.createCullFace(GL20.GL_BACK));
     }
 

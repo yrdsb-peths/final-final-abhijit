@@ -33,6 +33,7 @@ public final class MainMenuScreen implements Screen {
 
     private final UiButton testPlayer = new UiButton("Test Player", 0, 0, BTN_W, BTN_H);
     private final UiButton mapMaker   = new UiButton("Map Maker", 0, 0, BTN_W, BTN_H);
+    private final UiButton playMap    = new UiButton("Play Custom Map", 0, 0, BTN_W, BTN_H);
 
     public MainMenuScreen(Game game) {
         this.game = game;
@@ -48,15 +49,17 @@ public final class MainMenuScreen implements Screen {
 
         // --- Layout (centred, stacked). ---
         float cx = (w - BTN_W) * 0.5f;
-        float topY = h * 0.5f + (BTN_H + BTN_GAP) * 0.5f;
+        float topY = h * 0.5f + (BTN_H + BTN_GAP) * 1.5f;
         testPlayer.setBounds(cx, topY, BTN_W, BTN_H);
         mapMaker.setBounds(cx, topY - BTN_H - BTN_GAP, BTN_W, BTN_H);
+        playMap.setBounds(cx, topY - 2f * (BTN_H + BTN_GAP), BTN_W, BTN_H);
 
         // --- Mouse (convert y-down input to y-up). ---
         float mx = Gdx.input.getX();
         float my = h - Gdx.input.getY();
         testPlayer.setHovered(testPlayer.contains(mx, my));
         mapMaker.setHovered(mapMaker.contains(mx, my));
+        playMap.setHovered(playMap.contains(mx, my));
 
         shapes.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
         batch.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
@@ -64,6 +67,7 @@ public final class MainMenuScreen implements Screen {
         shapes.begin(ShapeType.Filled);
         testPlayer.renderBackground(shapes);
         mapMaker.renderBackground(shapes);
+        playMap.renderBackground(shapes);
         shapes.end();
 
         batch.begin();
@@ -76,6 +80,7 @@ public final class MainMenuScreen implements Screen {
 
         testPlayer.renderLabel(batch, font);
         mapMaker.renderLabel(batch, font);
+        playMap.renderLabel(batch, font);
         batch.end();
 
         // --- Click handling. ---
@@ -84,6 +89,8 @@ public final class MainMenuScreen implements Screen {
                 game.setScreen(new TestPlayerScreen(game));
             } else if (mapMaker.contains(mx, my)) {
                 game.setScreen(new MapMakerMenuScreen(game));
+            } else if (playMap.contains(mx, my)) {
+                game.setScreen(new MapListScreen(game));
             }
         }
     }

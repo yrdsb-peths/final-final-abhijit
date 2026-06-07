@@ -21,6 +21,19 @@ public final class CameraRig {
     private static final float FOLLOW_Y = 16f;     // tighter vertical follow so jumps stay framed
     private static final float FOV_BASE = 50f, FOV_SPRINT = 56f; // sprint widens FOV (vanilla speed cue)
 
+    // ---- bottom-wall proximity elevation ----
+    // Near the SOUTH (+Z) playable boundary the trailing camera would otherwise be dragged into the
+    // tall canyon scenery (near-plane clipping). As the player enters a buffer zone before that wall,
+    // the camera smoothly rises and steepens (pulls toward overhead) so the player stays framed. Only
+    // the bottom edge is treated — the camera naturally clears the top/side walls at this angle.
+    private static final float BOTTOM_BUFFER = 2f;  // blocks from the wall the effect begins (lower = later)
+    private static final float ELEV_EXTRA_Y = 9f;   // max extra camera height at the wall
+    private static final float ELEV_PULL_Z  = 3.2f; // how much the camera pulls overhead (steeper pitch)
+    private static final float ELEV_LERP     = 4f;  // smoothing speed for entering/leaving the zone
+
+    private float bottomZ = Float.NaN; // world Z of the south boundary; NaN = feature disabled
+    private float zoneT = 0f;          // smoothed 0..1 proximity factor
+
     private final Vector3 target = new Vector3();
     private final Vector3 desiredPos = new Vector3();
     private final Vector3 lookTmp = new Vector3();
@@ -38,9 +51,28 @@ public final class CameraRig {
         camera.update();
     }
 
+    /** Sets the south (+Z) playable-boundary world Z that triggers the proximity elevation. */
+    public void setBottomBoundary(float worldMaxZ) {
+        this.bottomZ = worldMaxZ;
+    }
+
     public void update(float delta, Vector3 playerPos, boolean sprinting) {
         lookTmp.set(playerPos.x, playerPos.y + LOOK_HEIGHT, playerPos.z);
-        desiredPos.set(playerPos).add(OFFSET);
+
+        // Proximity to the bottom wall → smoothed 0..1, eased. 0 outside the buffer, 1 at the wall.
+        float targetT = 0f;
+        if (!Float.isNaN(bottomZ)) {
+            float dist = bottomZ - playerPos.z; // shrinks as the player nears the +Z wall
+            float raw = MathUtils.clamp((BOTTOM_BUFFER - dist) / BOTTOM_BUFFER, 0f, 1f);
+            targetT = raw * raw * (3f - 2f * raw); // smoothstep
+        }
+        zoneT = MathUtils.lerp(zoneT, targetT, Math.min(1f, delta * ELEV_LERP));
+
+        // Raise the camera and pull it overhead as we approach the wall (steeper pitch via lookAt).
+        desiredPos.set(playerPos);
+        desiredPos.x += OFFSET.x;
+        desiredPos.y += OFFSET.y + zoneT * ELEV_EXTRA_Y;
+        desiredPos.z += OFFSET.z - zoneT * ELEV_PULL_Z;
 
         if (!initialised) {
             target.set(lookTmp);

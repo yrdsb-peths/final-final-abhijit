@@ -1,0 +1,120 @@
+# Blender MTL File: 'Armors.blend'
+# Material Count: 11
+
+newmtl Armour:Diamond
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\Internetstuffs\Blenderrig\2.2\Fullnew\Textures\Armor\diamond_1.png
+
+newmtl Armour:Diamond:2
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\animation\animotor\Blender_Minecraft_Rig\Textures\Armor\diamond_2.png
+
+newmtl Armour:Gold
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\Internetstuffs\Blenderrig\Cloud Update\Textures\armor\gold_1.png
+
+newmtl Armour:Gold2
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\Internetstuffs\Blenderrig\Cloud Update\Textures\armor\gold_2.png
+
+newmtl Armour:Iron
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\Internetstuffs\Blenderrig\Cloud Update\Textures\armor\iron_1.png
+
+newmtl Armour:Iron2
+Ns 96.078431
+Ka 0.070000 0.070000 0.070000
+Kd 0.640000 0.640000 0.640000
+Ks 0.100000 0.100000 0.100000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd E:\Internetstuffs\Blenderrig\Cloud Update\Textures\armor\iron_2.png
+
+newmtl Armour:Leather
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.155694 0.059371 0.023645
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 1
+map_Kd E:\animation\animotor\Blender_Minecraft_Rig\Textures\Armor\leather.png
+
+newmtl Armour:Leather2
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.155694 0.059371 0.023645
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 1
+map_Kd E:\animation\animotor\Blender_Minecraft_Rig\Textures\Armor\leather_2.png
+
+newmtl Armour:Leather2:Overlay
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.155694 0.059371 0.023645
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 1
+map_Kd E:\animation\animotor\Blender_Minecraft_Rig\Textures\Armor\leather_2.png
+
+newmtl Armour:Leather:Overlay
+Ns 96.078431
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 1
+map_Kd E:\animation\animotor\Blender_Minecraft_Rig\Textures\Armor\leather.png
+
+newmtl None
+Ns 0
+Ka 0.000000 0.000000 0.000000
+Kd 0.8 0.8 0.8
+Ks 0.8 0.8 0.8
+d 1
+illum 2
