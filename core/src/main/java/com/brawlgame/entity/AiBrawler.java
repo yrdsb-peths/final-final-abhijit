@@ -49,7 +49,7 @@ import com.badlogic.gdx.math.Matrix4;
  */
 public final class AiBrawler implements CombatTarget, Disposable {
 
-    private enum State { WANDER, CHASE, ATTACK }
+    private enum State { WANDER, CHASE, ATTACK, FLEE, HEAL }
     private enum Loadout { SWORD, GUN }
 
     private static final float HITBOX_HALF = 0.35f;
@@ -61,6 +61,10 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private static final float MELEE_RANGE = 1.7f, MELEE_HIT_RANGE = 2.3f;
     private static final float RUN_SPEED = 2.35f, WALK_SPEED = 1.2f, STRAFE_SPEED = 2.0f, STRAFE_RANGE = 3.6f;
     private static final float CHASE_SPRINT_MUL = 1.18f;
+    private static final float FLEE_SPEED = 2.8f, FLEE_THRESHOLD = 0.30f; // flee at 30% HP
+    private static final float FLEE_DIST = 6f;    // run this far before healing
+    private static final float HEAL_AMOUNT = 15f, HEAL_DURATION = 2.5f;
+    private static final float SPRINT_JUMP_DIST = 4.5f; // jump when closing from this range
     private static final float ACCEL = 14f;
 
     private static final float ATTACK_WINDUP = 0.42f;  // jump apex falls inside this → strike while descending
@@ -90,6 +94,8 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private State state = State.WANDER;
     private float hurtTimer, flashTimer;
     private float attackTimer, lungeTimer, cooldownTimer, rangedCooldown;
+    private float fleeTimer = 0f, healTimer = 0f;
+    private float sprintJumpCooldown = 0f;
     private boolean attacking;
     private boolean dying, gone;   // dying = playing the death tip-over; gone = finished, remove it
     private float deathTimer;
@@ -195,6 +201,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         if (cooldownTimer > 0f) cooldownTimer -= delta;
         if (rangedCooldown > 0f) rangedCooldown -= delta;
         if (lungeTimer > 0f) lungeTimer = Math.max(0f, lungeTimer - delta);
+        if (sprintJumpCooldown > 0f) sprintJumpCooldown -= delta;
 
         // Vertical physics (jumps / leap-attacks).
         vy -= GRAVITY * delta;
@@ -230,6 +237,22 @@ public final class AiBrawler implements CombatTarget, Disposable {
             float l = Math.max(dist, 0.001f);
             vel.set(dx / l * RUN_SPEED * 1.25f, 0f, dz / l * RUN_SPEED * 1.25f);
             faceToward(dx, dz);
+        } else if (state == State.FLEE || (health / maxHealth < FLEE_THRESHOLD && state != State.HEAL)) {
+            // Low HP — run away from player until safe distance, then heal.
+            state = State.FLEE;
+            fleeTimer += delta;
+            setSteer(-dx, -dz, FLEE_SPEED); // run opposite direction
+            if (dist > FLEE_DIST || fleeTimer > 4f) {
+                state = State.HEAL;
+                healTimer = HEAL_DURATION;
+                fleeTimer = 0f;
+            }
+        } else if (state == State.HEAL) {
+            // Stand still and recover HP.
+            healTimer -= delta;
+            setSteer(0, 0, 0);
+            health = Math.min(maxHealth, health + (HEAL_AMOUNT / HEAL_DURATION) * delta);
+            if (healTimer <= 0f) state = State.CHASE;
         } else if (dist < AGGRO_RANGE) {
             state = State.CHASE;
             // Weapon inventory: sword up close, potato gun at range.
@@ -240,6 +263,11 @@ public final class AiBrawler implements CombatTarget, Disposable {
             }
             float chaseSpeed = dist > STRAFE_RANGE ? RUN_SPEED * CHASE_SPRINT_MUL : STRAFE_SPEED;
             if (dist > STRAFE_RANGE) {
+                // Sprint-jump periodically when closing the gap from distance
+                if (onGround && dist > SPRINT_JUMP_DIST && sprintJumpCooldown <= 0f) {
+                    vy = JUMP_V; onGround = false;
+                    sprintJumpCooldown = MathUtils.random(1.5f, 2.5f);
+                }
                 setSteer(dx, dz, chaseSpeed);
             } else {
                 strafe(delta, dx, dz);
@@ -254,7 +282,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         integrate(delta);
         applyTransform();
         float horizSpeed = (float) Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-        boolean running = state == State.CHASE || state == State.ATTACK;
+        boolean running = state == State.CHASE || state == State.ATTACK || state == State.FLEE;
         animator.update(delta, horizSpeed, running, false, onGround, null);
         instance.calculateTransforms();
         anchorWeapon(attacking ? 1f - attackTimer / ATTACK_WINDUP : 0f);

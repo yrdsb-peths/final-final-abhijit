@@ -25,6 +25,9 @@ public final class MapRenderer implements Disposable {
     private final GameMap map;
     private final BlockLibrary lib;
 
+    // When true (gameplay), editor-only markers (SPAWN, CHEST, BUSH) are hidden from the world.
+    private boolean gameplayMode = false;
+
     // Batched, replayable geometry. Rebuilt only when the map goes dirty.
     private final ModelCache opaque = new ModelCache();
     private final ModelCache transparent = new ModelCache();
@@ -32,6 +35,11 @@ public final class MapRenderer implements Disposable {
     public MapRenderer(GameMap map, BlockLibrary lib) {
         this.map = map;
         this.lib = lib;
+    }
+
+    /** Hide editor-only markers during live gameplay. Call once after construction in GameScreen. */
+    public void setGameplayMode(boolean gameplay) {
+        if (gameplayMode != gameplay) { gameplayMode = gameplay; map.markDirty(); }
     }
 
     /** Re-bakes both caches from the current board state when (and only when) the map is dirty. */
@@ -50,6 +58,11 @@ public final class MapRenderer implements Disposable {
                 if (type == null) continue;
                 // Water is rendered by AnimatedWaterRenderer (scrolling UV layers).
                 if (type.category() == BlockCategory.WATER) continue;
+                // In gameplay, hide editor-only markers: spawn pads, chest props, and bush billboards.
+                if (gameplayMode) {
+                    BlockCategory cat = type.category();
+                    if (cat == BlockCategory.SPAWN || cat == BlockCategory.CHEST || cat == BlockCategory.BUSH) continue;
+                }
                 ModelInstance inst = lib.instance(type, map.worldX(c), map.worldZ(r));
                 if (inst == null) continue; // ERASER / unsupported
                 if (lib.isTransparent(type)) transparent.add(inst);

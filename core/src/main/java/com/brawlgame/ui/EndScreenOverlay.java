@@ -123,7 +123,13 @@ public final class EndScreenOverlay implements Disposable {
     }
 
     private void tryProceed() {
-        if (onProceed != null) onProceed.run();
+        if (onProceed != null) {
+            // Defer screen transition to avoid calling dispose() during render cycle
+            Runnable pending = onProceed;
+            onProceed = null; // Clear to prevent double-invocation
+            // Post the transition to run after current frame completes
+            Gdx.app.postRunnable(pending);
+        }
     }
 
     private void renderSide(boolean left, boolean won, int showIdx, MatchStats stats,

@@ -279,6 +279,7 @@ public final class BlockLibrary implements Disposable {
             case DARK_WATER:           return tex("water_still.png");
             case CHEST:                return tex("oak_planks.png");
             case SPAWN:
+            case SPAWN_BOT:
             case ERASER:
             default:                   return null;
         }
@@ -309,10 +310,11 @@ public final class BlockLibrary implements Disposable {
             if (t == null || t.category() == BlockCategory.ERASER) continue;
             if (!models.containsKey(t)) models.put(t, buildModel(t));
         }
-        // CHEST and SPAWN are shared specials guaranteed present in every theme palette, but build
+        // CHEST and SPAWN types are shared specials guaranteed present in every theme palette, but build
         // them defensively in case a future palette omits one.
-        if (!models.containsKey(BlockType.CHEST)) models.put(BlockType.CHEST, buildModel(BlockType.CHEST));
-        if (!models.containsKey(BlockType.SPAWN)) models.put(BlockType.SPAWN, buildModel(BlockType.SPAWN));
+        if (!models.containsKey(BlockType.CHEST))     models.put(BlockType.CHEST,     buildModel(BlockType.CHEST));
+        if (!models.containsKey(BlockType.SPAWN))     models.put(BlockType.SPAWN,     buildModel(BlockType.SPAWN));
+        if (!models.containsKey(BlockType.SPAWN_BOT)) models.put(BlockType.SPAWN_BOT, buildModel(BlockType.SPAWN_BOT));
     }
 
     private Model buildModel(BlockType t) {

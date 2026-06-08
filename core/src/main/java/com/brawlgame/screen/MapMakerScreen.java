@@ -161,6 +161,7 @@ public final class MapMakerScreen implements Screen {
 
     @Override
     public void render(float delta) {
+        if (modelBatch == null) return; // guard: hide() calls dispose() during screen transitions
         handleInput(delta);
         renderer.rebuildIfDirty();
 

@@ -40,18 +40,15 @@ public final class MatchManager implements Disposable {
 
     public MatchManager(GasZone gas, GameMap map) {
         this.gas = gas;
-        float cols = map.cols(), rows = map.rows();
-        float minDim = Math.max(cols, rows) * GameMap.CELL;
-        // Small maze ≈ 90s, medium ≈ 150s, large caps at 5:00.
-        matchSeconds = Math.max(90f, Math.min(300f, 45f + minDim * 9f));
-        gasGrace = Math.max(35f, Math.min(75f, matchSeconds * 0.38f));
+        // Fixed 60-second brawl — gas starts closing at 20s to keep small arenas tense.
+        matchSeconds = 60f;
+        gasGrace = 20f;
         timeLeft = matchSeconds;
         gasDelay = gasGrace;
     }
 
     public static float computeMatchSeconds(GameMap map) {
-        float minDim = Math.max(map.cols(), map.rows()) * GameMap.CELL;
-        return Math.max(90f, Math.min(300f, 45f + minDim * 9f));
+        return 60f;
     }
 
     public void resize(int width, int height) {

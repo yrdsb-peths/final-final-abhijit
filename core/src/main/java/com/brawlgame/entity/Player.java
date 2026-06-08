@@ -45,8 +45,8 @@ public final class Player implements Disposable {
     private static final float TICK = 1f / 20f;
     private static final float GROUND_FRICTION = 0.91f * 0.6f; // 0.546
     private static final float AIR_FRICTION = 0.91f;
-    private static final float WALK_ACCEL = 0.062f;            // ~2.7 b/s — tighter control in maze corridors
-    private static final float SPRINT_MUL = 1.12f;
+    private static final float WALK_ACCEL = 0.095f;            // ~4.2 b/s — responsive but controllable in corridors
+    private static final float SPRINT_MUL = 1.30f;
     private static final float SNEAK_MUL = 0.3f;
     private static final float AIR_ACCEL = 0.02f;
     private static final float GRAVITY = 0.08f;
@@ -323,7 +323,7 @@ public final class Player implements Disposable {
             : AIR_ACCEL * (sprinting ? SPRINT_MUL : 1f);
         vx += wish.x * accel;
         vz += wish.z * accel;
-        clampHorizontalSpeed(onGround && sprinting ? 0.26f : (onGround ? 0.20f : 0.17f));
+        clampHorizontalSpeed(onGround && sprinting ? 0.33f : (onGround ? 0.26f : 0.21f));
 
         // Decay knockback independently — not affected by WASD, so hits feel weighty.
         knockVx *= KNOCK_FRICTION;

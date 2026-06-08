@@ -16,7 +16,6 @@ import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
-import com.brawlgame.entity.ArmorRenderer;
 import com.brawlgame.item.Inventory;
 import com.brawlgame.model.MinecraftPlayerModel;
 
@@ -29,18 +28,15 @@ public final class CharacterShowcase implements Disposable {
   public static final class Entry implements Disposable {
     final Model model;
     final ModelInstance instance;
-    final ArmorRenderer armor;
 
-    Entry(Texture skin, Inventory gear) {
+    Entry(Texture skin) {
       model = MinecraftPlayerModel.build(skin);
       instance = new ModelInstance(model);
-      armor = gear != null ? new ArmorRenderer(gear) : null;
     }
 
     @Override
     public void dispose() {
       model.dispose();
-      if (armor != null) armor.dispose();
     }
   }
 
@@ -50,7 +46,8 @@ public final class CharacterShowcase implements Disposable {
   private Environment env;
 
   public int add(Texture skin, Inventory gear) {
-    entries.add(new Entry(skin, gear));
+    // armor is ignored for character previews - base skin only
+    entries.add(new Entry(skin));
     return entries.size() - 1;
   }
 
@@ -87,14 +84,12 @@ public final class CharacterShowcase implements Disposable {
 
     PreviewCamera.frame(cam, rw, rh, 0f, 2.1f, 0.55f);
     e.instance.transform.idt()
-        .setToRotation(Vector3.Y, spinY)
+        .setToRotation(Vector3.Y, spinY + 180f)  // +180 so model faces camera (camera at +Z, model front at -Z)
         .rotate(Vector3.Z, rollZ);
     e.instance.calculateTransforms();
 
     batch.begin(cam);
-    // TODO: Handle tinting if needed, ModelBatch doesn't have setColor
     batch.render(e.instance, env);
-    if (e.armor != null) e.armor.render(batch, env, e.instance);
     batch.end();
 
     Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST);

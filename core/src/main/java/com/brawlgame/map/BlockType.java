@@ -29,8 +29,9 @@ public enum BlockType {
     BUSH_BLUE            (BlockCategory.BUSH,  "Blue Bush",            0f, new Color(0.28f, 0.55f, 0.92f, 1f)),
 
     // ---- Shared specials ----
-    CHEST  (BlockCategory.CHEST, "Chest",       0f, null),
-    SPAWN  (BlockCategory.SPAWN, "Spawn Point", 0f, new Color(0.20f, 0.90f, 0.32f, 0.8f)), // green pad
+    CHEST     (BlockCategory.CHEST, "Chest",        0f, null),
+    SPAWN     (BlockCategory.SPAWN, "Player Spawn", 0f, new Color(0.20f, 0.90f, 0.32f, 0.8f)), // green pad
+    SPAWN_BOT (BlockCategory.SPAWN, "Enemy Spawn",  0f, new Color(0.90f, 0.20f, 0.22f, 0.8f)), // red pad
 
     ERASER (BlockCategory.ERASER,"Eraser",      0f, null);
 

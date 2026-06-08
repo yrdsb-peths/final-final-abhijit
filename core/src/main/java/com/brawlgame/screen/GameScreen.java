@@ -17,6 +17,7 @@ import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalShadowLight;
 import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
@@ -141,16 +142,29 @@ public final class GameScreen implements Screen {
         cameraRig.setBottomBoundary(map.worldZ(map.rows() - 1));
         library = new BlockLibrary(map.theme());
         renderer = new MapRenderer(map, library);
+        renderer.setGameplayMode(true); // hide SPAWN/CHEST/BUSH editor markers during live play
         scenery = new SceneryRenderer(map, library);
 
         skin = new Texture(Gdx.files.internal("textures/player.png"));
         player = new Player(skin);
 
-        // Spawn at the authored spawn point, or the board centre if none was placed.
-        int[] sp = map.findSpawn();
-        float sx = sp != null ? map.worldX(sp[0]) : 0f;
-        float sz = sp != null ? map.worldZ(sp[1]) : 0f;
+        // Find both spawn points. Randomly assign player/bot (50/50 swap for fairness).
+        int[] playerSpawnCell = map.findPlayerSpawn();
+        int[] botSpawnCell    = map.findBotSpawn();
+        if (playerSpawnCell != null && botSpawnCell != null && MathUtils.randomBoolean()) {
+            int[] tmp = playerSpawnCell; playerSpawnCell = botSpawnCell; botSpawnCell = tmp;
+        }
+
+        float sx = playerSpawnCell != null ? map.worldX(playerSpawnCell[0]) : 0f;
+        float sz = playerSpawnCell != null ? map.worldZ(playerSpawnCell[1]) : 0f;
         player.setSpawn(sx, sz);
+
+        float bMinX = map.worldX(1), bMaxX = map.worldX(map.cols() - 2);
+        float bMinZ = map.worldZ(1), bMaxZ = map.worldZ(map.rows() - 2);
+        float botStartX = botSpawnCell != null ? map.worldX(botSpawnCell[0])
+            : (sx <= 0f ? bMaxX * 0.6f : bMinX * 0.6f);
+        float botStartZ = botSpawnCell != null ? map.worldZ(botSpawnCell[1])
+            : (sz <= 0f ? bMaxZ * 0.6f : bMinZ * 0.6f);
 
         // Match intro: pan the camera from the corner diagonally opposite the player into the follow pose.
         float cornerX = sx <= 0f ? map.worldX(map.cols() - 1) : map.worldX(0);
@@ -161,10 +175,7 @@ public final class GameScreen implements Screen {
         water = new AnimatedWaterRenderer(map);
         endScreen = new EndScreenOverlay();
 
-        float bMinX = map.worldX(1), bMaxX = map.worldX(map.cols() - 2);
-        float bMinZ = map.worldZ(1), bMaxZ = map.worldZ(map.rows() - 2);
-        bot = new AiBrawler(skin, sx <= 0f ? bMaxX * 0.6f : bMinX * 0.6f,
-            sz <= 0f ? bMaxZ * 0.6f : bMinZ * 0.6f, bMinX, bMaxX, bMinZ, bMaxZ);
+        bot = new AiBrawler(skin, botStartX, botStartZ, bMinX, bMaxX, bMinZ, bMaxZ);
         player.getWeapon().setTarget(bot);
         player.setMatchElimination(true);
         player.setMatchStats(playerStats);
@@ -249,7 +260,7 @@ public final class GameScreen implements Screen {
         boolean intro = cameraRig.isIntroActive();
         if (intro) matchIntro.update(d);
         else if (!matchEnded) match.start();
-        if (!ui.isModalOpen() && !pause.isOpen() && !matchEnded) {
+        if (!pause.isOpen() && !matchEnded) {
             if (!intro) player.update(d, cameraRig.camera);
             cameraRig.update(d, player.getPosition(), player.isSprinting());
             if (intro) { /* gameplay (drops, ammo, gas, bot) resumes once the intro finishes */ }
@@ -283,12 +294,15 @@ public final class GameScreen implements Screen {
     }
 
     private void renderWorld(float d, boolean intro) {
+        // Defensive check for lifecycle issues during screen transitions
+        if (modelBatch == null) return;
+
         renderer.rebuildIfDirty();
 
         boolean canShadow = shadowsEnabled && shadowLight != null && shadowLight.getFrameBuffer() != null;
         if (canShadow) {
             shadowLight.begin(player.getPosition(), SUN_DIR);
-            shadowBatch.begin(shadowLight.getCamera());
+            if (shadowBatch != null) shadowBatch.begin(shadowLight.getCamera());
             scenery.renderCasters(shadowBatch);
             renderer.renderCasters(shadowBatch);
             shadowBatch.render(player.getModelInstance());

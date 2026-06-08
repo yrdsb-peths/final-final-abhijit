@@ -47,11 +47,16 @@ public final class MapSerializer {
         sb.append("SIZE ").append(map.size().id()).append('\n');
         sb.append("COLS ").append(map.cols()).append('\n');
         sb.append("ROWS ").append(map.rows()).append('\n');
-        // Exact world (x,y,z) of the spawn point, for the GameScreen to position the player.
-        int[] sp = map.findSpawn();
-        if (sp != null) {
-            sb.append("SPAWN ").append(map.worldX(sp[0])).append(' ').append(0f)
-                .append(' ').append(map.worldZ(sp[1])).append('\n');
+        // Exact world (x,y,z) of spawn points, for the GameScreen to position player and bot.
+        int[] pSp = map.findPlayerSpawn();
+        if (pSp != null) {
+            sb.append("SPAWN ").append(map.worldX(pSp[0])).append(' ').append(0f)
+                .append(' ').append(map.worldZ(pSp[1])).append('\n');
+        }
+        int[] bSp = map.findBotSpawn();
+        if (bSp != null) {
+            sb.append("SPAWN_BOT ").append(map.worldX(bSp[0])).append(' ').append(0f)
+                .append(' ').append(map.worldZ(bSp[1])).append('\n');
         }
         sb.append("# col row BLOCK_TYPE\n");
         for (int c = 0; c < map.cols(); c++) {

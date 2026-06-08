@@ -121,9 +121,9 @@ public final class GameMap {
      */
     public boolean apply(int c, int r, BlockType t) {
         if (!inBounds(c, r)) return false;
-        // A map has exactly one spawn point: placing a new one clears any previous (in the same
-        // stroke, so undo restores it together).
-        if (t == BlockType.SPAWN) clearExistingSpawn(c, r);
+        // Each spawn type is unique — placing a new one clears any earlier cell of the same type
+        // (undo restores both together as one stroke).
+        if (t == BlockType.SPAWN || t == BlockType.SPAWN_BOT) clearExistingSpawnOfType(c, r, t);
         BlockType before = cells[c][r];
         boolean changed = (t == null || t.category() == BlockCategory.ERASER) ? erase(c, r) : place(c, r, t);
         if (changed) {
@@ -143,11 +143,11 @@ public final class GameMap {
         stroke = null;
     }
 
-    /** Erases any spawn cell other than (keepC,keepR), recording the change into the open stroke. */
-    private void clearExistingSpawn(int keepC, int keepR) {
+    /** Erases any cell of {@code type} other than (keepC,keepR), recording the change into the open stroke. */
+    private void clearExistingSpawnOfType(int keepC, int keepR, BlockType type) {
         for (int c = 0; c < cols; c++) {
             for (int r = 0; r < rows; r++) {
-                if (cells[c][r] == BlockType.SPAWN && !(c == keepC && r == keepR)) {
+                if (cells[c][r] == type && !(c == keepC && r == keepR)) {
                     if (stroke == null) stroke = new ArrayList<>();
                     stroke.add(new Edit(c, r, cells[c][r], null));
                     cells[c][r] = null;
@@ -157,11 +157,26 @@ public final class GameMap {
         }
     }
 
-    /** Grid coords {col,row} of the spawn point, or {@code null} if none is placed. */
+    /** Grid coords {col,row} of the player spawn (SPAWN), or {@code null} if none is placed. */
+    public int[] findPlayerSpawn() {
+        return findCellOfType(BlockType.SPAWN);
+    }
+
+    /** Grid coords {col,row} of the bot/enemy spawn (SPAWN_BOT), or {@code null} if none is placed. */
+    public int[] findBotSpawn() {
+        return findCellOfType(BlockType.SPAWN_BOT);
+    }
+
+    /** Backward-compatible: returns the first SPAWN or SPAWN_BOT found, player spawn preferred. */
     public int[] findSpawn() {
+        int[] p = findPlayerSpawn();
+        return p != null ? p : findBotSpawn();
+    }
+
+    private int[] findCellOfType(BlockType type) {
         for (int c = 0; c < cols; c++) {
             for (int r = 0; r < rows; r++) {
-                if (cells[c][r] == BlockType.SPAWN) return new int[] {c, r};
+                if (cells[c][r] == type) return new int[] {c, r};
             }
         }
         return null;
