@@ -1,8 +1,5 @@
 package com.brawlgame.screen;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
@@ -17,261 +14,291 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.Input.TextInputListener;
+import com.brawlgame.game.PlayerProfile;
+import com.brawlgame.map.GameMap;
+import com.brawlgame.map.MapSerializer;
 import com.brawlgame.ui.BedrockWidgets;
 import com.brawlgame.ui.CharacterShowcase;
 import com.brawlgame.ui.UiViewport;
 
 /**
- * Minecraft Dungeons / Bedrock-style main menu.
+ * Main menu — Minecraft Dungeons / Bedrock aesthetic.
  *
  * <p>Layout:
  * <ul>
- *   <li>Dark atmospheric background with a subtle stone-tile gradient vignette.</li>
- *   <li>"MINECRAFT BRAWL" logo — gold, top-center, oversized.</li>
- *   <li>Live 3D player model in a centre-right portrait, slowly rotating.</li>
- *   <li>Bottom-left: large green "START GAME" + secondary "CHANGE MAP" and "MAP MAKER" sub-buttons.</li>
- *   <li>Bottom-right: small Accessibility / Settings / Exit prompts.</li>
- *   <li>[H] cycles through skin PNGs found in the local {@code skins/} folder.</li>
+ *   <li>Atmospheric dark background with a subtle grid vignette.</li>
+ *   <li>"MINECRAFT" (gold) + "BRAWL" (green) stacked logo, top-centre.</li>
+ *   <li>Stats panel, top-right: Matches Played / Win Rate.</li>
+ *   <li>Four primary buttons centred: Single Player · Multiplayer · Skins · Options.</li>
+ *   <li>Map Maker button (below Options) — only visible when Developer Mode is ON.</li>
+ *   <li>Test Map button at the very bottom.</li>
+ *   <li>"Dev Mode Active" watermark at bottom-centre when dev mode is on.</li>
+ *   <li>Live 3D character portrait, centre-right.</li>
  * </ul>
  */
 public final class MainMenuScreen implements Screen {
 
-    private static final String TITLE    = "MINECRAFT BRAWL";
-    private static final String SUBTITLE = "Brawl-Stars style  ·  Minecraft aesthetic";
+    private static final String DEFAULT_MAP = "maps/sand_small_1.map";
 
-    private static final float BTN_W  = 300f, BTN_H  = 62f;
-    private static final float SUB_W  = 256f, SUB_H  = 44f;
-    private static final float BTN_GAP = 10f;
+    private static final float BTN_W = 340f, BTN_H = 58f, BTN_GAP = 12f;
 
-    // Bedrock palette constants used inline
-    private static final Color BG_TOP    = new Color(0.07f, 0.07f, 0.10f, 1f);
-    private static final Color GOLD      = new Color(1.00f, 0.86f, 0.16f, 1f);
-    private static final Color SUBTITLE_COL = new Color(0.60f, 0.60f, 0.65f, 1f);
-    private static final Color HINT_COL  = new Color(0.45f, 0.80f, 0.45f, 0.92f);
-    private static final Color PROMPT_COL = new Color(0.55f, 0.55f, 0.60f, 1f);
-    private static final Color GREEN_BTN = new Color(0.33f, 0.60f, 0.14f, 1f);
-    private static final Color GREEN_HOV = new Color(0.42f, 0.74f, 0.18f, 1f);
+    private static final Color GOLD  = new Color(1.00f, 0.86f, 0.16f, 1f);
+    private static final Color GREEN = new Color(0.38f, 0.73f, 0.16f, 1f);
+    private static final Color MUTED = new Color(0.55f, 0.55f, 0.60f, 1f);
+    private static final Color STAT_BG = new Color(0.08f, 0.09f, 0.12f, 0.88f);
 
     private final Game game;
+    private final UiViewport    uv = new UiViewport();
+    private final ShapeRenderer sh = new ShapeRenderer();
+    private final SpriteBatch   bt = new SpriteBatch();
+    private final BitmapFont    fn = new BitmapFont();
+    private final GlyphLayout   gl = new GlyphLayout();
 
-    private final ShapeRenderer shapes = new ShapeRenderer();
-    private final SpriteBatch   batch  = new SpriteBatch();
-    private final BitmapFont    font   = new BitmapFont();
-    private final GlyphLayout   glyph  = new GlyphLayout();
-    private final UiViewport    uiv    = new UiViewport();
-
-    // Button hit-rects (set each frame from layout)
-    private float startX, startY, startW, startH;
-    private float changeX, changeY, changeW, changeH;
-    private float makerX, makerY, makerW, makerH;
-
-    // 3D character preview
+    // 3D preview
     private CharacterShowcase showcase;
-    private int charIdx = -1;
-    private float spinAngle = 0f;
-    private static final float SPIN_SPEED = 28f; // degrees/sec
+    private int showcaseIdx = -1;
+    private Texture skinTex;
 
-    // Skin management
-    private final List<Texture> skins = new ArrayList<>();
-    private int currentSkin = 0;
+    // Button Y positions (computed once in render from current layout)
+    private float spY, mpY, skY, opY, mmY, tmY;
+    private static final float BTN_CX = 380f; // centre X of the button column
+    private static final float NAME_H = 44f;  // height of the player-name field
 
-    public MainMenuScreen(Game game) {
-        this.game = game;
-    }
+    public MainMenuScreen(Game game) { this.game = game; }
 
     @Override
     public void show() {
-        loadSkins();
-        buildShowcase();
-    }
-
-    private void loadSkins() {
-        for (Texture t : skins) t.dispose();
-        skins.clear();
-        // Default built-in skin always first.
-        skins.add(new Texture(Gdx.files.internal("textures/player.png")));
-        // User-provided skins from local skins/ folder.
-        FileHandle skinsDir = Gdx.files.local("skins");
-        if (skinsDir.exists() && skinsDir.isDirectory()) {
-            for (FileHandle f : skinsDir.list(".png")) {
-                try { skins.add(new Texture(f)); } catch (Exception ignored) {}
-            }
-        }
-    }
-
-    private void buildShowcase() {
-        if (showcase != null) showcase.dispose();
+        loadSkin();
         showcase = new CharacterShowcase();
-        charIdx = showcase.add(skins.get(currentSkin), null);
+        showcaseIdx = showcase.add(skinTex, null);
+    }
+
+    private void loadSkin() {
+        if (skinTex != null) skinTex.dispose();
+        String path = PlayerProfile.get().selectedSkin;
+        if (!path.isEmpty()) {
+            FileHandle f = Gdx.files.local(path);
+            if (f.exists()) { skinTex = new Texture(f); return; }
+        }
+        skinTex = new Texture(Gdx.files.internal("textures/player.png"));
     }
 
     @Override
     public void render(float delta) {
-        float w = uiv.width(), h = uiv.height();
+        float W = uv.width(), H = uv.height();
 
-        // ---- Input ----
-        if (Gdx.input.isKeyJustPressed(Input.Keys.H)) cycleSkin();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) Gdx.app.exit();
-
-        spinAngle = (spinAngle + SPIN_SPEED * delta) % 360f;
-
-        // ---- Clear ----
-        Gdx.gl.glClearColor(BG_TOP.r, BG_TOP.g, BG_TOP.b, 1f);
+        Gdx.gl.glClearColor(0.06f, 0.06f, 0.09f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
-        // ---- 3D character portrait (right half of screen) ----
-        float portX = w * 0.52f, portY = h * 0.20f, portW = w * 0.40f, portH = h * 0.72f;
-        if (showcase != null && charIdx >= 0) {
-            showcase.render(uiv, charIdx, portX, portY, portW, portH, spinAngle, 0f, Color.WHITE);
+        // 3D preview — right half, rendered before uiv.apply to use full viewport
+        float prevX = W * 0.54f, prevY = H * 0.08f, prevW = W * 0.42f, prevH = H * 0.84f;
+        if (showcase != null && showcaseIdx >= 0) {
+            showcase.render(uv, showcaseIdx, prevX, prevY, prevW, prevH,
+                (System.currentTimeMillis() % 7000) / 7000f * 360f, 0f, Color.WHITE);
         }
 
-        // ---- 2D UI ----
-        uiv.apply();
-        shapes.setProjectionMatrix(uiv.combined());
-        batch.setProjectionMatrix(uiv.combined());
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        Vector2 m = uiv.unproject(Gdx.input.getX(), Gdx.input.getY());
+        uv.apply();
+        sh.setProjectionMatrix(uv.combined());
+        bt.setProjectionMatrix(uv.combined());
 
-        // ---- Layout ----
-        // Left-panel dark overlay
-        float panelW = w * 0.55f;
-        shapes.begin(ShapeType.Filled);
-        shapes.setColor(0.03f, 0.03f, 0.05f, 0.88f);
-        shapes.rect(0, 0, panelW, h);
+        Vector2 m = uv.unproject(Gdx.input.getX(), Gdx.input.getY());
 
-        // Button layout — bottom-left
-        float bx = 56f, by = 90f;
-        startX = bx; startY = by + SUB_H + BTN_GAP * 2f; startW = BTN_W; startH = BTN_H;
-        changeX = bx + 20f; changeY = by + BTN_GAP; changeW = SUB_W; changeH = SUB_H;
-        makerX  = bx + 20f; makerY  = by + BTN_GAP + SUB_H + BTN_GAP; makerW = SUB_W; makerH = SUB_H;
+        // ---- layout ----
+        boolean devMode = PlayerProfile.get().devMode;
+        // Count visible buttons to centre the stack
+        int btnCount = 4 + (devMode ? 1 : 0);
+        float stackH = btnCount * BTN_H + (btnCount - 1) * BTN_GAP;
+        float stackTop = H * 0.5f + stackH * 0.5f;
 
-        // Recalculate — START sits above the two subs
-        startY = by + (SUB_H + BTN_GAP) * 2f + BTN_GAP;
+        spY = stackTop - 0 * (BTN_H + BTN_GAP);
+        mpY = stackTop - 1 * (BTN_H + BTN_GAP);
+        skY = stackTop - 2 * (BTN_H + BTN_GAP);
+        opY = stackTop - 3 * (BTN_H + BTN_GAP);
+        mmY = devMode ? stackTop - 4 * (BTN_H + BTN_GAP) : -9999f;
+        // Test Map at bottom regardless
+        tmY = 38f;
+        // Name input field sits between test map and the button stack
+        float nameY = tmY + 46f + 14f; // 14 px gap above the test map button
 
-        boolean startHov  = contains(startX, startY, startW, startH, m);
-        boolean changeHov = contains(changeX, changeY, changeW, changeH, m);
-        boolean makerHov  = contains(makerX,  makerY,  makerW,  makerH,  m);
+        float bx = BTN_CX - BTN_W * 0.5f;
 
-        // START GAME — big green primary button
-        drawGreenButton(startX, startY, startW, startH, startHov);
-        // Sub-buttons (Bedrock dark style)
-        BedrockWidgets.button(shapes, changeX, changeY, changeW, changeH,
-            changeHov ? BedrockWidgets.BtnState.HOVER : BedrockWidgets.BtnState.NORMAL);
-        BedrockWidgets.button(shapes, makerX, makerY, makerW, makerH,
-            makerHov ? BedrockWidgets.BtnState.HOVER : BedrockWidgets.BtnState.NORMAL);
+        boolean spHov   = hover(m, bx, spY,  BTN_W, BTN_H);
+        boolean mpHov   = hover(m, bx, mpY,  BTN_W, BTN_H);
+        boolean skHov   = hover(m, bx, skY,  BTN_W, BTN_H);
+        boolean opHov   = hover(m, bx, opY,  BTN_W, BTN_H);
+        boolean mmHov   = devMode && hover(m, bx, mmY, BTN_W, BTN_H);
+        boolean tmHov   = hover(m, bx, tmY,  260f,  46f);
+        boolean nameHov = hover(m, bx, nameY, BTN_W, NAME_H);
 
-        shapes.end();
+        // ---- shapes ----
+        sh.begin(ShapeType.Filled);
 
-        // ---- Text ----
-        batch.begin();
+        // Left dark panel
+        sh.setColor(0.04f, 0.04f, 0.06f, 0.92f);
+        sh.rect(0, 0, W * 0.52f, H);
 
-        // Logo
-        font.getData().setScale(3.8f);
-        font.setColor(GOLD);
-        glyph.setText(font, TITLE);
-        float logoX = (panelW - glyph.width) * 0.5f;
-        // Drop-shadow
-        font.setColor(0f, 0f, 0f, 0.7f);
-        font.draw(batch, TITLE, logoX + 3f, h - 72f);
-        font.setColor(GOLD);
-        font.draw(batch, TITLE, logoX, h - 70f);
+        // Stats panel (top-right)
+        float stPX = W * 0.54f, stPY = H - 130f, stPW = W * 0.42f, stPH = 110f;
+        sh.setColor(STAT_BG);
+        sh.rect(stPX, stPY, stPW, stPH);
+        BedrockWidgets.border(sh, stPX, stPY, stPW, stPH, 2f, BedrockWidgets.BTN_EDGE);
 
-        // Subtitle
-        font.getData().setScale(1.25f);
-        font.setColor(SUBTITLE_COL);
-        glyph.setText(font, SUBTITLE);
-        font.draw(batch, SUBTITLE, (panelW - glyph.width) * 0.5f, h - 126f);
+        // Primary buttons
+        shBtn(sh, bx, spY, BTN_W, BTN_H, spHov, true);  // Single Player — green primary
+        shBtn(sh, bx, mpY, BTN_W, BTN_H, mpHov, false);
+        shBtn(sh, bx, skY, BTN_W, BTN_H, skHov, false);
+        shBtn(sh, bx, opY, BTN_W, BTN_H, opHov, false);
+        if (devMode) shBtn(sh, bx, mmY, BTN_W, BTN_H, mmHov, false);
+        shBtn(sh, bx, tmY, 260f, 46f, tmHov, false);
+        // Player name input field
+        sh.setColor(nameHov ? new Color(0.16f, 0.18f, 0.24f, 0.95f) : new Color(0.12f, 0.13f, 0.18f, 0.90f));
+        sh.rect(bx, nameY, BTN_W, NAME_H);
+        sh.setColor(nameHov ? new Color(0.55f, 0.55f, 0.60f, 1f) : new Color(0.30f, 0.30f, 0.35f, 1f));
+        sh.rect(bx, nameY, BTN_W, 2f);
+        sh.rect(bx, nameY + NAME_H - 2f, BTN_W, 2f);
+        sh.rect(bx, nameY, 2f, NAME_H);
+        sh.rect(bx + BTN_W - 2f, nameY, 2f, NAME_H);
+
+        sh.end();
+
+        // ---- text ----
+        bt.begin();
+
+        // MINECRAFT / BRAWL logo
+        fn.getData().setScale(4.2f);
+        fn.setColor(0f, 0f, 0f, 0.6f);
+        fn.draw(bt, "MINECRAFT", BTN_CX - 192f + 3f, H - 42f);
+        fn.setColor(GOLD);
+        fn.draw(bt, "MINECRAFT", BTN_CX - 192f, H - 42f);
+
+        fn.getData().setScale(3.4f);
+        fn.setColor(0f, 0f, 0f, 0.6f);
+        fn.draw(bt, "BRAWL", BTN_CX - 118f + 3f, H - 108f);
+        fn.setColor(GREEN);
+        fn.draw(bt, "BRAWL", BTN_CX - 118f, H - 108f);
+
+        // Stats panel
+        PlayerProfile p = PlayerProfile.get();
+        fn.getData().setScale(1.15f);
+        fn.setColor(MUTED);
+        fn.draw(bt, "Total Matches Played:  " + p.totalMatches, stPX + 14f, stPY + stPH - 18f);
+        fn.draw(bt, "Wins:  " + p.wins + "   Losses:  " + p.losses, stPX + 14f, stPY + stPH - 42f);
+        fn.draw(bt, "Win Rate:  " + p.winRateString(), stPX + 14f, stPY + stPH - 66f);
 
         // Button labels
-        font.getData().setScale(1.5f);
-        font.setColor(Color.WHITE);
-        drawCenteredText("START GAME", startX, startY, startW, startH);
-        font.getData().setScale(1.1f);
-        font.setColor(BedrockWidgets.TEXT_LIGHT);
-        drawCenteredText("CHANGE MAP", changeX, changeY, changeW, changeH);
-        drawCenteredText("MAP MAKER",  makerX,  makerY,  makerW,  makerH);
+        fn.getData().setScale(1.45f);
+        fn.setColor(Color.WHITE);
+        btnLabel("Single Player", bx, spY, BTN_W, BTN_H);
+        btnLabel("Multiplayer",   bx, mpY, BTN_W, BTN_H);
+        btnLabel("Skins",         bx, skY, BTN_W, BTN_H);
+        btnLabel("Options",       bx, opY, BTN_W, BTN_H);
+        if (devMode) btnLabel("Map Maker", bx, mmY, BTN_W, BTN_H);
+        fn.getData().setScale(1.15f);
+        btnLabel("Test Map", bx, tmY, 260f, 46f);
 
-        // Bottom-right prompts
-        font.getData().setScale(1.1f);
-        font.setColor(PROMPT_COL);
-        float rx = w - 230f, ry = 110f;
-        font.draw(batch, "Exit           [ESC]",  rx, ry + 70f);
-        font.draw(batch, "Settings       [F2]",   rx, ry + 44f);
-        font.draw(batch, "Accessibility  [F1]",   rx, ry + 18f);
+        // Name input field — label on left, player name on right
+        fn.getData().setScale(0.95f);
+        fn.setColor(MUTED);
+        fn.draw(bt, "Name:", bx + 10f, nameY + NAME_H * 0.5f + 7f);
+        fn.getData().setScale(1.25f);
+        fn.setColor(nameHov ? Color.WHITE : new Color(0.88f, 0.88f, 0.92f, 1f));
+        String pn = PlayerProfile.get().playerName;
+        gl.setText(fn, pn);
+        fn.draw(bt, pn, bx + BTN_W - gl.width - 10f, nameY + NAME_H * 0.5f + 8f);
 
-        // Skin hint below portrait
-        font.getData().setScale(1.05f);
-        if (skins.size() > 1) {
-            font.setColor(HINT_COL);
-            String hint = "[H]  Cycle Skin   " + (currentSkin + 1) + " / " + skins.size();
-            glyph.setText(font, hint);
-            font.draw(batch, hint, portX + (portW - glyph.width) * 0.5f, portY - 12f);
-        } else {
-            font.setColor(PROMPT_COL);
-            font.draw(batch, "Add PNGs to  skins/  to unlock skins", portX - 10f, portY - 12f);
+        // Dev watermark — anchored at very bottom centre, below Test Map button
+        if (devMode) {
+            fn.getData().setScale(0.95f);
+            fn.setColor(1f, 0.5f, 0.1f, 0.70f);
+            gl.setText(fn, "DEV MODE");
+            fn.draw(bt, "DEV MODE", W * 0.5f - gl.width * 0.5f, 10f);
         }
 
-        font.getData().setScale(1f);
-        batch.end();
+        fn.getData().setScale(1f);
+        bt.end();
         Gdx.gl.glDisable(GL20.GL_BLEND);
 
-        // ---- Click handling ----
+        // ---- click handling ----
         if (Gdx.input.justTouched()) {
-            if (startHov || changeHov)  game.setScreen(new MapListScreen(game));
-            else if (makerHov)          game.setScreen(new MapMakerMenuScreen(game));
+            if (nameHov) {
+                Gdx.input.getTextInput(new TextInputListener() {
+                    @Override public void input(String text) {
+                        String name = text.trim();
+                        if (!name.isEmpty()) {
+                            PlayerProfile.get().playerName = name;
+                        }
+                    }
+                    @Override public void canceled() {}
+                }, "Enter your player name", PlayerProfile.get().playerName, "");
+            } else if (spHov) launchSinglePlayer();
+            else if (mpHov) game.setScreen(new MultiplayerScreen(game));
+            else if (skHov) game.setScreen(new SkinsScreen(game));
+            else if (opHov) game.setScreen(new OptionsMenuScreen(game));
+            else if (mmHov) game.setScreen(new MapMakerMenuScreen(game));
+            else if (tmHov) game.setScreen(new TestPlayerScreen(game));
+        }
+        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) Gdx.app.exit();
+    }
+
+    private void launchSinglePlayer() {
+        GameMap map = null;
+        try {
+            FileHandle f = Gdx.files.local(DEFAULT_MAP);
+            if (!f.exists()) f = Gdx.files.internal(DEFAULT_MAP);
+            map = MapSerializer.load(f);
+        } catch (Exception ignored) {}
+        if (map == null) return;
+        float diff = PlayerProfile.get().difficultyScale();
+        game.setScreen(new GameScreen(game, map, diff));
+    }
+
+    // ---- drawing helpers ----
+
+    private void shBtn(ShapeRenderer s, float x, float y, float w, float h, boolean hov, boolean primary) {
+        if (primary) {
+            // Green primary
+            Color fill = hov ? new Color(0.42f, 0.74f, 0.18f, 1f) : new Color(0.33f, 0.60f, 0.14f, 1f);
+            s.setColor(fill);
+            s.rect(x, y, w, h);
+            s.setColor(fill.r * 1.3f, fill.g * 1.3f, fill.b * 1.3f, 1f);
+            s.rect(x + 3f, y + h - 4f, w - 6f, 2f);
+            BedrockWidgets.border(s, x, y, w, h, 3f, BedrockWidgets.BTN_EDGE);
+        } else {
+            BedrockWidgets.button(s, x, y, w, h,
+                hov ? BedrockWidgets.BtnState.HOVER : BedrockWidgets.BtnState.NORMAL);
         }
     }
 
-    private void cycleSkin() {
-        if (skins.size() <= 1) return;
-        currentSkin = (currentSkin + 1) % skins.size();
-        buildShowcase();
+    private void btnLabel(String text, float bx, float by, float bw, float bh) {
+        gl.setText(fn, text);
+        fn.draw(bt, text, bx + (bw - gl.width) * 0.5f, by + (bh + gl.height) * 0.5f);
     }
 
-    // ---- Drawing helpers ----
-
-    private void drawGreenButton(float x, float y, float w, float h, boolean hovered) {
-        Color fill = hovered ? GREEN_HOV : GREEN_BTN;
-        shapes.setColor(fill);
-        shapes.rect(x, y, w, h);
-        // top bevel highlight
-        shapes.setColor(fill.r * 1.35f, fill.g * 1.35f, fill.b * 1.35f, 1f);
-        shapes.rect(x + 3f, y + h - 4f, w - 6f, 2f);
-        // thick dark border
-        BedrockWidgets.border(shapes, x, y, w, h, 3f, BedrockWidgets.BTN_EDGE);
+    private static boolean hover(Vector2 m, float x, float y, float w, float h) {
+        return m.x >= x && m.x <= x + w && m.y >= y && m.y <= y + h;
     }
-
-    private void drawCenteredText(String text, float bx, float by, float bw, float bh) {
-        glyph.setText(font, text);
-        font.draw(batch, text, bx + (bw - glyph.width) * 0.5f, by + (bh + glyph.height) * 0.5f);
-    }
-
-    private static boolean contains(float bx, float by, float bw, float bh, Vector2 p) {
-        return p.x >= bx && p.x <= bx + bw && p.y >= by && p.y <= by + bh;
-    }
-
-    // ---- Screen lifecycle ----
 
     @Override
-    public void resize(int width, int height) {
-        uiv.resize(width, height);
-        shapes.setProjectionMatrix(uiv.combined());
-        batch.setProjectionMatrix(uiv.combined());
+    public void resize(int w, int h) {
+        uv.resize(w, h);
+        sh.setProjectionMatrix(uv.combined());
+        bt.setProjectionMatrix(uv.combined());
     }
 
-    @Override public void hide()   {}
     @Override public void pause()  {}
     @Override public void resume() {}
+    @Override public void hide()   { dispose(); }
 
     @Override
     public void dispose() {
-        shapes.dispose();
-        batch.dispose();
-        font.dispose();
+        sh.dispose();
+        bt.dispose();
+        fn.dispose();
         if (showcase != null) showcase.dispose();
-        for (Texture t : skins) t.dispose();
-        skins.clear();
+        if (skinTex  != null) skinTex.dispose();
     }
 }

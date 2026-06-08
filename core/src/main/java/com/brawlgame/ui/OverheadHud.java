@@ -93,7 +93,7 @@ public final class OverheadHud implements Disposable {
         if (!project(cam, chestWorld)) return;
         beginHud();
 
-        float cx = vc.x, top = vc.y + 60f;
+        float cx = vc.x, top = vc.y + 20f;
         float barX = cx - BAR_W * 0.5f;
         float hpBarY = top - 38f, segY = top - 54f;
 
@@ -125,7 +125,7 @@ public final class OverheadHud implements Disposable {
         if (!project(cam, chestWorld)) return;
         beginHud();
 
-        float cx = vc.x, top = vc.y + 54f;
+        float cx = vc.x, top = vc.y + 20f;
         float barX = cx - BAR_W * 0.5f, hpBarY = top - 36f;
 
         shapes.begin(ShapeType.Filled);

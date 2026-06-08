@@ -1,6 +1,7 @@
 package com.brawlgame.combat;
 
 import com.badlogic.gdx.Gdx;
+import com.brawlgame.audio.SoundManager;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Color;
@@ -56,7 +57,7 @@ public final class WeaponController implements Disposable {
 
     // ---- attack timing / shape ----
     private static final float SWING_DUR  = 0.50f;
-    private static final float PUNCH_DUR  = 0.26f;
+    private static final float PUNCH_DUR  = 0.18f; // faster bare-fist jab
     private static final float WINDUP     = 0.30f;  // sword wind-up fraction
     private static final float STRIKE_AT  = 0.40f;  // sword spark point
     private static final float PUNCH_HIT  = 0.42f;  // punch spark point
@@ -98,8 +99,8 @@ public final class WeaponController implements Disposable {
     private static final float GUN_BLEND_TIME = 0.15f; // tactical-frame transition
 
     // ---- gun firing (potato projectiles) ----
-    // Potato hits hard but is NOT a one-shot — several are needed to drop the armoured rival.
-    private static final float GUN_DMG = 16f, GUN_SPEED = 22f, GUN_RANGE = 14f, GUN_COOLDOWN = 0.28f;
+    // Potato hits moderately hard — several are needed to drop the armoured rival.
+    private static final float GUN_DMG = 12f, GUN_SPEED = 18f, GUN_RANGE = 12f, GUN_COOLDOWN = 0.35f;
     private static final float GUN_MUZZLE_OFFSET = 0.6f; // forward spawn offset from the player
     private static final float GUN_FIRE_Y = 1.3f;        // chest height the potato leaves from
 
@@ -140,6 +141,9 @@ public final class WeaponController implements Disposable {
     // Hit hearts are spawned by the struck entity (CombatDummy), so they appear ON the entity.
 
     private Weapon current = Weapon.FIST;
+    private Weapon prevWeapon = null; // null = first equip ever; no swap penalty
+    private float swapCooldown = 0f;         // brief recovery window after a weapon switch
+    private static final float SWAP_CD = 0.40f;
     private float gunBlend;
 
     private boolean attacking;
@@ -271,21 +275,21 @@ public final class WeaponController implements Disposable {
     /** Edge-detected attack input only: left-click swings (fist/sword) or fires (gun). */
     public void handleInput() {
         boolean click = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
-        if (click && !prevClick) {
+        if (click && !prevClick && swapCooldown <= 0f) { // swap recovery blocks attacks
             if (current == Weapon.GUN) {
                 if (gunCooldown <= 0f) {
                     if (ammo >= 1) { pendingFire = true; gunCooldown = GUN_COOLDOWN; ammo--; }
-                    else dryFire = true; // out of ammo → can't fire, just signal the empty bar
+                    else dryFire = true;
                 }
-            } else if (current != Weapon.ITEM && !attacking) { // held items (armour) don't swing
+            } else if (current != Weapon.ITEM && !attacking) {
                 if (ammo >= 1) {
                     attacking = true;
                     attackT = 0f;
                     struck = false;
                     altHand = !altHand;
-                    ammo--;        // consume a round; the swing (and its damage) only runs with ammo
+                    ammo--;
                 } else {
-                    dryFire = true; // out of ammo → no swing at all
+                    dryFire = true;
                 }
             }
         }
@@ -440,8 +444,19 @@ public final class WeaponController implements Disposable {
         }
     }
 
-    /** The combat target the attacks resolve against (the dummy), set by the Player. */
-    public void setTarget(CombatTarget target) { this.target = target; }
+    /** Replace all registered targets with a single one (backward-compat helper). */
+    public void setTarget(CombatTarget target) {
+        this.target = target;
+        targets.clear();
+        if (target != null) targets.add(target);
+    }
+
+    /** Register an additional combat target (for test-map multi-dummy setups). */
+    public void addTarget(CombatTarget t) {
+        if (t != null && !targets.contains(t)) { targets.add(t); this.target = targets.get(0); }
+    }
+
+    private final java.util.List<CombatTarget> targets = new java.util.ArrayList<>();
 
     /** Optional callback so match stats can track damage dealt by the player. */
     public void setDamageDealtListener(java.util.function.Consumer<Float> listener) {
@@ -471,33 +486,39 @@ public final class WeaponController implements Disposable {
     private float meleeBaseDamage() {
         if (current == Weapon.FIST) return 1f;
         switch (swordVariant) {
-            case STONE:   return 5f;
-            case IRON:    return 6f;
-            case DIAMOND: return 7f;
+            case STONE:   return 4f;
+            case IRON:    return 5f;
+            case DIAMOND: return 6f;
             case WOOD:
             case GOLD:
-            default:      return 4f;
+            default:      return 3f;
         }
     }
 
-    /** If the target sits within {@code reach} and the frontal arc, register the hit + knockback. */
+    /** Hit every registered target that sits within {@code reach} and the frontal arc. */
     private boolean tryMeleeHit(float reach, float halfDeg, float dmg, boolean crit) {
-        if (target == null) return false;
-        Vector3 tp = target.position();
-        float dx = tp.x - aimX, dz = tp.z - aimZ;
-        float dist2 = dx * dx + dz * dz;
-        float r = reach + target.radius();
-        if (dist2 > r * r || dist2 < 1e-5f) return false;
+        if (targets.isEmpty()) return false;
         float fr = facingDeg * D2R;
         float fwdX = -MathUtils.sin(fr), fwdZ = -MathUtils.cos(fr);
-        float dist = (float) Math.sqrt(dist2);
-        float dot = (dx * fwdX + dz * fwdZ) / dist;
-        if (dot < MathUtils.cosDeg(halfDeg)) return false;
-        if (!CombatLoS.clear(collider, aimX, aimZ, tp.x, tp.z)) return false;
-        hitDir.set(dx, 0f, dz).nor();
-        target.onHit(dmg, hitDir, crit);
-        reportDamage(dmg);
-        return true;
+        boolean anyHit = false;
+        for (CombatTarget t : targets) {
+            Vector3 tp = t.position();
+            float dx = tp.x - aimX, dz = tp.z - aimZ;
+            float dist2 = dx * dx + dz * dz;
+            float r = reach + t.radius();
+            if (dist2 > r * r || dist2 < 1e-5f) continue;
+            float dist = (float) Math.sqrt(dist2);
+            float dot = (dx * fwdX + dz * fwdZ) / dist;
+            if (dot < MathUtils.cosDeg(halfDeg)) continue;
+            if (!CombatLoS.clear(collider, aimX, aimZ, tp.x, tp.z)) continue;
+            hitDir.set(dx, 0f, dz).nor();
+            t.onHit(dmg, hitDir, crit);
+            reportDamage(dmg);
+            anyHit = true;
+            // Play sword hit sound on successful hit
+            SoundManager.get().playSwordHit();
+        }
+        return anyHit;
     }
 
     private void sampleSwordVfx() {
@@ -535,6 +556,8 @@ public final class WeaponController implements Disposable {
         PotatoProjectile p = null;
         for (PotatoProjectile cand : potatoes) if (!cand.isAlive()) { p = cand; break; }
         if (p == null) return;
+        // Play gun sound on fire
+        SoundManager.get().playGun();
 
         // Muzzle = barrel-tip local point transformed by the live gun matrix.
         buildGunMatrix(gunMat);
@@ -568,20 +591,25 @@ public final class WeaponController implements Disposable {
         for (PotatoProjectile p : potatoes) {
             if (!p.isAlive()) continue;
             boolean impacted = p.update(delta, collider);
-            // Enemy hit while still flying (e.g. the training dummy) — pops hearts on the entity.
-            if (target != null && p.isFlying()) {
-                Vector3 tp = target.position();
-                float dx = tp.x - p.position().x, dz = tp.z - p.position().z;
-                float hr = target.radius() + 0.3f;
-                if (dx * dx + dz * dz < hr * hr && p.position().y > 0.3f && p.position().y < 2.2f
-                    && CombatLoS.clear(collider, p.position().x, p.position().z, tp.x, tp.z)) {
-                    hitDir.set(dx, 0f, dz).nor();
-                    target.onHit(GUN_DMG, hitDir, false);
-                    reportDamage(GUN_DMG);
-                    impactFx.burst(p.position(), 12);
-                    p.destroy();
-                    continue;
+            // Enemy hit while still flying — check all registered targets.
+            if (p.isFlying() && !targets.isEmpty()) {
+                boolean potatoHit = false;
+                for (CombatTarget t : targets) {
+                    Vector3 tp = t.position();
+                    float dx = tp.x - p.position().x, dz = tp.z - p.position().z;
+                    float hr = t.radius() + 0.3f;
+                    if (dx * dx + dz * dz < hr * hr && p.position().y > 0.3f && p.position().y < 2.2f
+                        && CombatLoS.clear(collider, p.position().x, p.position().z, tp.x, tp.z)) {
+                        hitDir.set(dx, 0f, dz).nor();
+                        t.onHit(GUN_DMG, hitDir, false);
+                        reportDamage(GUN_DMG);
+                        impactFx.burst(p.position(), 12);
+                        p.destroy();
+                        potatoHit = true;
+                        break;
+                    }
                 }
+                if (potatoHit) continue;
             }
             // Ground/wall impact this frame → splash dirt + potato chunks.
             if (impacted) impactFx.burst(p.position(), 14);
@@ -615,10 +643,24 @@ public final class WeaponController implements Disposable {
     public int ammoCapacity() { return ammoCapacity; }
     public boolean pollDryFire() { boolean b = dryFire; dryFire = false; return b; }
 
-    /** Refill ammo over time; switching weapons reloads to full. */
+    /** Refill ammo over time. Switching weapon types triggers a swap-recovery cooldown. */
     private void tickAmmo(float delta) {
         int cap = reloadSegments();
-        if (cap != ammoCapacity) { ammoCapacity = cap; ammo = cap; ammoRefillTimer = 0f; } // weapon changed → full
+        if (current != prevWeapon) {
+            boolean firstEquip = prevWeapon == null;
+            prevWeapon = current;
+            ammoCapacity = cap;
+            ammoRefillTimer = 0f;
+            if (firstEquip) {
+                ammo = cap; // initial equip: full ammo, no penalty
+            } else {
+                ammo = 0;              // switching mid-fight: must reload from scratch
+                swapCooldown = SWAP_CD; // block attacks for a brief recovery window
+            }
+        } else if (cap != ammoCapacity) {
+            ammoCapacity = cap; // same weapon, capacity changed (e.g. same type, different tier)
+        }
+        if (swapCooldown > 0f) swapCooldown = Math.max(0f, swapCooldown - delta);
         if (ammo < ammoCapacity) {
             ammoRefillTimer += delta;
             float per = reloadSecondsPerSegment();
@@ -640,17 +682,17 @@ public final class WeaponController implements Disposable {
         }
     }
 
-    /** Seconds to refill one reload segment — diamond reloads fastest, wood/gold slowest. */
+    /** Seconds to refill one reload segment — significantly faster across the board. */
     public float reloadSecondsPerSegment() {
-        if (current == Weapon.GUN) return 2.4f;
-        if (current == Weapon.FIST) return 1.8f;
+        if (current == Weapon.GUN)  return 0.9f;
+        if (current == Weapon.FIST) return 0.6f;
         switch (swordVariant) {
-            case DIAMOND: return 2.0f;
-            case IRON:    return 2.8f;
-            case STONE:   return 3.2f;
+            case DIAMOND: return 0.7f;
+            case IRON:    return 0.9f;
+            case STONE:   return 1.1f;
             case WOOD:
             case GOLD:
-            default:      return 3.8f;
+            default:      return 1.3f;
         }
     }
 

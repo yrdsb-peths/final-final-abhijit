@@ -210,7 +210,7 @@ public final class MapMakerScreen implements Screen {
         }
 
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
-            game.setScreen(new MapMakerMenuScreen(game));
+            game.setScreen(new MainMenuScreen(game));
             return;
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.E)) inventory.toggle();

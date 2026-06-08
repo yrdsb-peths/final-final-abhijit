@@ -37,6 +37,12 @@ public final class CombatDummy implements CombatTarget, Disposable {
     private boolean tinted;
     private final ColorAttribute redTint = ColorAttribute.createDiffuse(HURT_TINT);
 
+    // Knockback: velocity that decays over time so the dummy physically bounces on a hit.
+    private static final float KB_STRENGTH = 4.0f;
+    private static final float KB_FRICTION = 6.0f; // exponential decay rate (higher = snappier stop)
+    private float knockVx, knockVz;
+    private final Vector3 origin; // starting position — dummy drifts back after a hit
+
     // Hit hearts spawned ON this entity (at its chest) — so they appear on whatever is struck.
     private final Sparks hearts = new Sparks();
     private final Vector3 chestTmp = new Vector3();
@@ -45,6 +51,7 @@ public final class CombatDummy implements CombatTarget, Disposable {
         model = MinecraftPlayerModel.build(skin);
         instance = new ModelInstance(model);
         pos.set(x, 0f, z);
+        origin = new Vector3(x, 0f, z);
         applyTransform();
     }
 
@@ -55,6 +62,23 @@ public final class CombatDummy implements CombatTarget, Disposable {
             facingDeg = MathUtils.atan2(-dx, -dz) * MathUtils.radiansToDegrees;
         }
         if (hurtTimer > 0f) hurtTimer = Math.max(0f, hurtTimer - delta);
+
+        // Integrate knockback, then decay it exponentially so the dummy bounces and settles.
+        pos.x += knockVx * delta;
+        pos.z += knockVz * delta;
+        float decay = (float) Math.exp(-KB_FRICTION * delta);
+        knockVx *= decay;
+        knockVz *= decay;
+
+        // Slowly drift back to origin so the arena doesn't drift over time.
+        float ox = origin.x - pos.x, oz = origin.z - pos.z;
+        float returnSpeed = 1.2f * delta;
+        float distToOrigin = (float) Math.sqrt(ox * ox + oz * oz);
+        if (distToOrigin > 0.05f) {
+            pos.x += (ox / distToOrigin) * Math.min(returnSpeed, distToOrigin);
+            pos.z += (oz / distToOrigin) * Math.min(returnSpeed, distToOrigin);
+        }
+
         applyTransform();
         applyTint();
         hearts.update(delta);
@@ -81,9 +105,12 @@ public final class CombatDummy implements CombatTarget, Disposable {
     @Override
     public void onHit(float damage, Vector3 fromDir, boolean crit) {
         hurtTimer = HURT_DUR;
-        tinted = false;                       // force re-tint next applyTint()
-        // Hearts pop ON the dummy itself, at chest height. A critical hit explodes into a much heavier
-        // burst (plus a second offset puff) so the extra power reads instantly.
+        tinted = false; // force re-tint next applyTint()
+        // Apply a physics knockback impulse away from the attacker.
+        float strength = crit ? KB_STRENGTH * 1.6f : KB_STRENGTH;
+        knockVx += fromDir.x * strength;
+        knockVz += fromDir.z * strength;
+        // Hearts pop at chest height.
         hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.4f, pos.z), crit ? 16 : 5);
         if (crit) hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.0f, pos.z), 10);
     }

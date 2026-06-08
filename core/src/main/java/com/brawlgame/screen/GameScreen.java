@@ -3,6 +3,7 @@ package com.brawlgame.screen;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
@@ -19,6 +20,7 @@ import com.badlogic.gdx.graphics.g3d.environment.DirectionalShadowLight;
 import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
+import com.badlogic.gdx.math.collision.Ray;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
 import com.brawlgame.entity.AiBrawler;
@@ -39,6 +41,8 @@ import com.brawlgame.map.BlockType;
 import com.brawlgame.map.GameMap;
 import com.brawlgame.map.MapRenderer;
 import com.brawlgame.map.SceneryRenderer;
+import com.brawlgame.net.GameClient;
+import com.brawlgame.net.GameServer;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
 import com.brawlgame.ui.CharacterShowcase;
@@ -60,6 +64,7 @@ import com.brawlgame.ui.Settings;
  * collision is a later phase. Spawning + rendering the authored map is what this screen delivers.
  */
 public final class GameScreen implements Screen {
+    private enum NetworkRole { SOLO, HOST, CLIENT }
 
     private static final Vector3 SUN_DIR = new Vector3(0.85f, -1.5f, 0.85f).nor();
     /** Half-width of the gun's straight-shot rectangular aim reticle (world units). */
@@ -69,6 +74,10 @@ public final class GameScreen implements Screen {
 
     private final Game game;
     private final GameMap map;
+    private final float difficultyScale; // 1.0 = normal, >1.0 = harder
+    private final NetworkRole networkRole;
+    private final GameServer netServer;
+    private final GameClient netClient;
 
     private ModelBatch modelBatch;
     private ModelBatch shadowBatch;
@@ -82,6 +91,7 @@ public final class GameScreen implements Screen {
     private SceneryRenderer scenery;
     private Player player;
     private Texture skin;
+    private Texture botSkin; // separate texture so the bot never shares the player's skin
     private AimCone aimCone;
     private GroundIndicator ground;
     private PlayerUI ui;
@@ -111,10 +121,32 @@ public final class GameScreen implements Screen {
     private CharacterShowcase showcase;
     private int showcasePlayer, showcaseRival;
     private boolean matchEnded;
+    private final RemoteInput remoteInput = new RemoteInput();
 
     public GameScreen(Game game, GameMap map) {
+        this(game, map, 1f, NetworkRole.SOLO, null, null);
+    }
+
+    public GameScreen(Game game, GameMap map, float difficultyScale) {
+        this(game, map, difficultyScale, NetworkRole.SOLO, null, null);
+    }
+
+    public GameScreen(Game game, GameMap map, GameServer server) {
+        this(game, map, 1f, NetworkRole.HOST, server, null);
+    }
+
+    public GameScreen(Game game, GameMap map, GameClient client) {
+        this(game, map, 1f, NetworkRole.CLIENT, null, client);
+    }
+
+    private GameScreen(Game game, GameMap map, float difficultyScale,
+                       NetworkRole networkRole, GameServer netServer, GameClient netClient) {
         this.game = game;
-        this.map = map;
+        this.map  = map;
+        this.difficultyScale = difficultyScale;
+        this.networkRole = networkRole;
+        this.netServer = netServer;
+        this.netClient = netClient;
     }
 
     @Override
@@ -145,26 +177,41 @@ public final class GameScreen implements Screen {
         renderer.setGameplayMode(true); // hide SPAWN/CHEST/BUSH editor markers during live play
         scenery = new SceneryRenderer(map, library);
 
-        skin = new Texture(Gdx.files.internal("textures/player.png"));
-        player = new Player(skin);
-
-        // Find both spawn points. Randomly assign player/bot (50/50 swap for fairness).
-        int[] playerSpawnCell = map.findPlayerSpawn();
-        int[] botSpawnCell    = map.findBotSpawn();
-        if (playerSpawnCell != null && botSpawnCell != null && MathUtils.randomBoolean()) {
-            int[] tmp = playerSpawnCell; playerSpawnCell = botSpawnCell; botSpawnCell = tmp;
+        String skinPath = com.brawlgame.game.PlayerProfile.get().selectedSkin;
+        if (!skinPath.isEmpty() && Gdx.files.local(skinPath).exists()) {
+            skin = new Texture(Gdx.files.local(skinPath));
+        } else {
+            skin = new Texture(Gdx.files.internal("textures/player.png"));
         }
+        player = new Player(skin);
+        botSkin = loadBotSkin(skinPath);
 
-        float sx = playerSpawnCell != null ? map.worldX(playerSpawnCell[0]) : 0f;
-        float sz = playerSpawnCell != null ? map.worldZ(playerSpawnCell[1]) : 0f;
-        player.setSpawn(sx, sz);
+        // Player always spawns at the south (high-Z) side so the camera looks north consistently.
+        // Bot spawns at the north (low-Z) side.  If the map has explicit spawn cells we pick the
+        // more-south one for the player; otherwise we use map boundary fallbacks.
+        int[] spawnA = map.findPlayerSpawn();
+        int[] spawnB = map.findBotSpawn();
+        int[] playerSpawnCell, botSpawnCell;
+        if (spawnA != null && spawnB != null) {
+            // Choose the spawn with the higher row index (= higher Z = south) for the player
+            if (spawnA[1] >= spawnB[1]) { playerSpawnCell = spawnA; botSpawnCell = spawnB; }
+            else                         { playerSpawnCell = spawnB; botSpawnCell = spawnA; }
+        } else {
+            playerSpawnCell = spawnA;
+            botSpawnCell    = spawnB;
+        }
 
         float bMinX = map.worldX(1), bMaxX = map.worldX(map.cols() - 2);
         float bMinZ = map.worldZ(1), bMaxZ = map.worldZ(map.rows() - 2);
-        float botStartX = botSpawnCell != null ? map.worldX(botSpawnCell[0])
-            : (sx <= 0f ? bMaxX * 0.6f : bMinX * 0.6f);
-        float botStartZ = botSpawnCell != null ? map.worldZ(botSpawnCell[1])
-            : (sz <= 0f ? bMaxZ * 0.6f : bMinZ * 0.6f);
+
+        // Player at south; fallback = near bottom of playable area
+        float sx = playerSpawnCell != null ? map.worldX(playerSpawnCell[0]) : 0f;
+        float sz = playerSpawnCell != null ? map.worldZ(playerSpawnCell[1]) : bMaxZ * 0.7f;
+        player.setSpawn(sx, sz);
+
+        // Bot at north; fallback = near top of playable area
+        float botStartX = botSpawnCell != null ? map.worldX(botSpawnCell[0]) : 0f;
+        float botStartZ = botSpawnCell != null ? map.worldZ(botSpawnCell[1]) : bMinZ * 0.7f;
 
         // Match intro: pan the camera from the corner diagonally opposite the player into the follow pose.
         float cornerX = sx <= 0f ? map.worldX(map.cols() - 1) : map.worldX(0);
@@ -175,7 +222,8 @@ public final class GameScreen implements Screen {
         water = new AnimatedWaterRenderer(map);
         endScreen = new EndScreenOverlay();
 
-        bot = new AiBrawler(skin, botStartX, botStartZ, bMinX, bMaxX, bMinZ, bMaxZ);
+        bot = new AiBrawler(botSkin, botStartX, botStartZ, bMinX, bMaxX, bMinZ, bMaxZ);
+        if (difficultyScale != 1f) bot.setDifficultyScale(difficultyScale);
         player.getWeapon().setTarget(bot);
         player.setMatchElimination(true);
         player.setMatchStats(playerStats);
@@ -234,6 +282,28 @@ public final class GameScreen implements Screen {
         debug = new DebugRenderer();
     }
 
+    /** Loads a skin texture that is visually distinct from the player's skin. */
+    private Texture loadBotSkin(String playerSkinPath) {
+        com.badlogic.gdx.files.FileHandle dir = Gdx.files.local("skins");
+        if (dir.exists() && dir.isDirectory()) {
+            java.util.List<com.badlogic.gdx.files.FileHandle> candidates = new java.util.ArrayList<>();
+            for (com.badlogic.gdx.files.FileHandle f : dir.list(".png")) {
+                if (!f.path().equals(playerSkinPath)) candidates.add(f);
+            }
+            if (!candidates.isEmpty()) {
+                com.badlogic.gdx.files.FileHandle pick =
+                    candidates.get(MathUtils.random(candidates.size() - 1));
+                try { return new Texture(pick); } catch (Exception ignored) {}
+            }
+        }
+        // Player used a custom skin → bot gets the default skin (and vice versa)
+        if (!playerSkinPath.isEmpty()) {
+            return new Texture(Gdx.files.internal("textures/player.png"));
+        }
+        // No alternative available: both use the default (only happens on a bare install)
+        return new Texture(Gdx.files.internal("textures/player.png"));
+    }
+
     @Override
     public void render(float delta) {
         float d = Math.min(delta, 1f / 30f);
@@ -261,36 +331,170 @@ public final class GameScreen implements Screen {
         if (intro) matchIntro.update(d);
         else if (!matchEnded) match.start();
         if (!pause.isOpen() && !matchEnded) {
-            if (!intro) player.update(d, cameraRig.camera);
-            cameraRig.update(d, player.getPosition(), player.isSprinting());
-            if (intro) { /* gameplay (drops, ammo, gas, bot) resumes once the intro finishes */ }
-            else {
-            for (Iterator<ItemEntity> it = drops.iterator(); it.hasNext(); ) {
-                ItemEntity e = it.next();
-                if (e.update(d, player.getPosition())) { inventory.add(e.stack()); e.dispose(); it.remove(); }
-            }
-            WeaponController wc = player.getWeapon();
-            overhead.update(d, wc.ammo(), wc.ammoCapacity(), wc.pollDryFire());
-            match.update(d);
-            water.update(d);
-            gas.update(d);
-            gasDmgTimer += d;
-            boolean gasTick = gas.isActive() && gasDmgTimer >= GAS_TICK;
-            if (gasTick) gasDmgTimer = 0f;
-            if (gasTick && gas.inGas(player.getPosition().x, player.getPosition().z)) player.applyDamage(GAS_DAMAGE);
+            if (networkRole == NetworkRole.CLIENT) {
+                pollClientState();
+                if (!intro) sendClientInput();
+                cameraRig.update(d, localCameraTarget(), false);
+                if (!intro) {
+                    match.update(d);
+                    water.update(d);
+                    gas.update(d);
+                    checkClientMatchEnd();
+                }
+            } else {
+                if (networkRole == NetworkRole.HOST) pollRemoteInput();
+                if (!intro) player.update(d, cameraRig.camera);
+                cameraRig.update(d, player.getPosition(), player.isSprinting());
+                if (intro) { /* gameplay (drops, ammo, gas, rival) resumes once the intro finishes */ }
+                else {
+                for (Iterator<ItemEntity> it = drops.iterator(); it.hasNext(); ) {
+                    ItemEntity e = it.next();
+                    if (e.update(d, player.getPosition())) { inventory.add(e.stack()); e.dispose(); it.remove(); }
+                }
+                WeaponController wc = player.getWeapon();
+                overhead.update(d, wc.ammo(), wc.ammoCapacity(), wc.pollDryFire());
+                match.update(d);
+                water.update(d);
+                gas.update(d);
+                gasDmgTimer += d;
+                boolean gasTick = gas.isActive() && gasDmgTimer >= GAS_TICK;
+                if (gasTick) gasDmgTimer = 0f;
+                if (gasTick && gas.inGas(player.getPosition().x, player.getPosition().z)) player.applyDamage(GAS_DAMAGE);
 
-            bot.update(d, player);
-            if (gasTick && gas.inGas(bot.position().x, bot.position().z)) bot.damage(GAS_DAMAGE);
-            if (bot.isDead() && brawlersLeft > 1) brawlersLeft = 1;
-            checkMatchEnd(gasTick);
-            if (Settings.get().justPressed(Settings.Action.DROP)) {
-                ItemStack d2 = ui.takeOneFromSelectedHotbar();
-                if (d2 != null) drops.add(new ItemEntity(d2, ui.iconTexture(d2.type),
-                    player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
+                if (networkRole == NetworkRole.HOST) {
+                    bot.updateRemote(d, remoteInput.forward, remoteInput.backward, remoteInput.left,
+                        remoteInput.right, remoteInput.jump, remoteInput.sprint, remoteInput.attack,
+                        remoteInput.aimDeg, player);
+                } else {
+                    bot.update(d, player);
+                }
+                if (gasTick && gas.inGas(bot.position().x, bot.position().z)) bot.damage(GAS_DAMAGE);
+                if (bot.isDead() && brawlersLeft > 1) brawlersLeft = 1;
+                checkMatchEnd(gasTick);
+                if (Settings.get().justPressed(Settings.Action.DROP)) {
+                    ItemStack d2 = ui.takeOneFromSelectedHotbar();
+                    if (d2 != null) drops.add(new ItemEntity(d2, ui.iconTexture(d2.type),
+                        player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
+                }
+                } // end !intro gameplay
+                if (networkRole == NetworkRole.HOST) sendServerState();
             }
-            } // end !intro gameplay
         }
         renderWorld(d, intro);
+    }
+
+    private Vector3 localCameraTarget() {
+        if (networkRole == NetworkRole.CLIENT && bot != null) return bot.position();
+        return player.getPosition();
+    }
+
+    private void pollRemoteInput() {
+        if (netServer == null) return;
+        String line = netServer.pollClientInput();
+        if (line == null || line.isEmpty()) return;
+        remoteInput.parse(line);
+    }
+
+    private void sendClientInput() {
+        if (netClient == null || !netClient.isConnected()) return;
+        Settings cfg = Settings.get();
+        boolean forward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.FORWARD));
+        boolean backward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.BACKWARD));
+        boolean left = Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT));
+        boolean right = Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT));
+        boolean jump = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+        boolean sprint = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT)
+            || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+        boolean attack = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
+        float aimDeg = aimDegFromMouse(bot != null ? bot.position() : player.getPosition());
+        netClient.sendInput(String.format(Locale.US, "INPUT %d %d %d %d %d %d %d %.2f",
+            bit(forward), bit(backward), bit(left), bit(right), bit(jump), bit(sprint), bit(attack), aimDeg));
+    }
+
+    private void pollClientState() {
+        if (netClient == null) return;
+        String line = netClient.pollServerState();
+        if (line == null || line.isEmpty()) return;
+        applyServerState(line);
+    }
+
+    private void sendServerState() {
+        if (netServer == null || !netServer.isClientConnected()) return;
+        Vector3 p = player.getPosition();
+        Vector3 b = bot.position();
+        netServer.sendState(String.format(Locale.US,
+            "STATE %.3f %.3f %.3f %.3f %.2f %d %.3f %.3f %.3f %.3f %.2f %d",
+            p.x, p.y, p.z, player.getHealth(), player.getFacingDeg(), bit(player.isEliminated()),
+            b.x, b.y, b.z, bot.health(), bot.facingDeg(), bit(bot.isDead() || bot.isDying())));
+    }
+
+    private void applyServerState(String line) {
+        String[] parts = line.trim().split("\\s+");
+        if (parts.length < 13 || !"STATE".equals(parts[0])) return;
+        try {
+            float px = Float.parseFloat(parts[1]);
+            float py = Float.parseFloat(parts[2]);
+            float pz = Float.parseFloat(parts[3]);
+            float ph = Float.parseFloat(parts[4]);
+            float pf = Float.parseFloat(parts[5]);
+            boolean pe = "1".equals(parts[6]);
+            float bx = Float.parseFloat(parts[7]);
+            float by = Float.parseFloat(parts[8]);
+            float bz = Float.parseFloat(parts[9]);
+            float bh = Float.parseFloat(parts[10]);
+            float bf = Float.parseFloat(parts[11]);
+            boolean be = "1".equals(parts[12]);
+            player.setNetworkSnapshot(px, py, pz, ph, pf, pe);
+            bot.setNetworkSnapshot(bx, by, bz, bh, bf, be);
+            if ((pe || be) && brawlersLeft > 1) brawlersLeft = 1;
+        } catch (NumberFormatException ignored) {
+        }
+    }
+
+    private void checkClientMatchEnd() {
+        if (matchEnded) return;
+        boolean hostOut = player.isEliminated() || player.getHealth() <= 0f;
+        boolean guestOut = bot.isDead() || bot.health() <= 0f;
+        if (!hostOut && !guestOut) return;
+        matchEnded = true;
+        MatchManager.Outcome outcome = hostOut && guestOut
+            ? MatchManager.Outcome.DRAW
+            : (hostOut ? MatchManager.Outcome.RIVAL_WIN : MatchManager.Outcome.PLAYER_WIN);
+        endScreen.show(outcome, playerStats, rivalStats, () -> game.setScreen(new MainMenuScreen(game)));
+    }
+
+    private float aimDegFromMouse(Vector3 origin) {
+        if (cameraRig == null || cameraRig.camera == null) return Float.NaN;
+        Ray ray = cameraRig.camera.getPickRay(Gdx.input.getX(), Gdx.input.getY());
+        float planeY = origin.y + 1.0f;
+        if (Math.abs(ray.direction.y) < 1e-5f) return Float.NaN;
+        float t = (planeY - ray.origin.y) / ray.direction.y;
+        if (t <= 0f) return Float.NaN;
+        float dx = ray.origin.x + ray.direction.x * t - origin.x;
+        float dz = ray.origin.z + ray.direction.z * t - origin.z;
+        if (dx * dx + dz * dz < 0.04f) return Float.NaN;
+        return MathUtils.atan2(-dx, -dz) * MathUtils.radiansToDegrees;
+    }
+
+    private static int bit(boolean b) { return b ? 1 : 0; }
+
+    private static final class RemoteInput {
+        boolean forward, backward, left, right, jump, sprint, attack;
+        float aimDeg = Float.NaN;
+
+        void parse(String line) {
+            String[] p = line.trim().split("\\s+");
+            if (p.length < 9 || !"INPUT".equals(p[0])) return;
+            forward = "1".equals(p[1]);
+            backward = "1".equals(p[2]);
+            left = "1".equals(p[3]);
+            right = "1".equals(p[4]);
+            jump = "1".equals(p[5]);
+            sprint = "1".equals(p[6]);
+            attack = "1".equals(p[7]);
+            try { aimDeg = Float.parseFloat(p[8]); }
+            catch (NumberFormatException e) { aimDeg = Float.NaN; }
+        }
     }
 
     private void renderWorld(float d, boolean intro) {
@@ -301,7 +505,7 @@ public final class GameScreen implements Screen {
 
         boolean canShadow = shadowsEnabled && shadowLight != null && shadowLight.getFrameBuffer() != null;
         if (canShadow) {
-            shadowLight.begin(player.getPosition(), SUN_DIR);
+            shadowLight.begin(localCameraTarget(), SUN_DIR);
             if (shadowBatch != null) shadowBatch.begin(shadowLight.getCamera());
             scenery.renderCasters(shadowBatch);
             renderer.renderCasters(shadowBatch);
@@ -323,8 +527,9 @@ public final class GameScreen implements Screen {
         modelBatch.end();
 
         if (!intro && !matchEnded) {
-            ground.renderPlayer(cameraRig.camera, player.getPosition().x, player.getPosition().z,
-                PLAYER_RING_RADIUS, player.getFacingDeg());
+            Vector3 focus = localCameraTarget();
+            float facing = networkRole == NetworkRole.CLIENT ? bot.facingDeg() : player.getFacingDeg();
+            ground.renderPlayer(cameraRig.camera, focus.x, focus.z, PLAYER_RING_RADIUS, facing);
         }
 
         modelBatch.begin(cameraRig.camera);
@@ -336,7 +541,7 @@ public final class GameScreen implements Screen {
         for (ItemEntity e : drops) e.render(modelBatch, environment);
         modelBatch.end();
 
-        if (!intro && !matchEnded && !player.isEliminated()) {
+        if (!intro && !matchEnded && !player.isEliminated() && networkRole != NetworkRole.CLIENT) {
             WeaponController w = player.getWeapon();
             if (w.aimConeVisible()) {
                 if (w.getWeapon() == WeaponController.Weapon.GUN) {
@@ -353,12 +558,16 @@ public final class GameScreen implements Screen {
         if (showDebug) debug.render(cameraRig.camera, player);
 
         if (!player.isEliminated()) {
-            platePos.set(player.getPosition().x, player.getPosition().y + 2.2f, player.getPosition().z);
-            overhead.render(cameraRig.camera, platePos, "Player", player.getHealth(), player.getMaxHealth());
+            platePos.set(player.getPosition().x, player.getPosition().y + 5.5f, player.getPosition().z);
+            overhead.render(cameraRig.camera, platePos,
+                networkRole == NetworkRole.CLIENT ? "Host" : com.brawlgame.game.PlayerProfile.get().playerName,
+                player.getHealth(), player.getMaxHealth());
         }
         if (!bot.isDead() && !bot.isDying()) {
-            botPlatePos.set(bot.position().x, bot.position().y + 2.2f, bot.position().z);
-            overhead.renderSimple(cameraRig.camera, botPlatePos, "Rival", bot.health(), bot.maxHealth());
+            botPlatePos.set(bot.position().x, bot.position().y + 5.5f, bot.position().z);
+            overhead.renderSimple(cameraRig.camera, botPlatePos,
+                networkRole == NetworkRole.CLIENT ? "You" : (networkRole == NetworkRole.HOST ? "Guest" : "Rival"),
+                bot.health(), bot.maxHealth());
         }
         overhead.renderLabel("Brawlers left: " + brawlersLeft);
         if (!intro && !matchEnded) match.renderTimer();
@@ -383,6 +592,11 @@ public final class GameScreen implements Screen {
         if (rivalOut && !playerOut) playerStats.addTakedown();
         if (match.outcome() != MatchManager.Outcome.NONE && !matchEnded) {
             matchEnded = true;
+            // Record result in persistent player profile
+            if (match.outcome() == MatchManager.Outcome.PLAYER_WIN)
+                com.brawlgame.game.PlayerProfile.get().recordWin();
+            else if (match.outcome() == MatchManager.Outcome.RIVAL_WIN)
+                com.brawlgame.game.PlayerProfile.get().recordLoss();
             endScreen.show(match.outcome(), playerStats, rivalStats,
                 () -> game.setScreen(new MainMenuScreen(game)));
         }
@@ -426,11 +640,14 @@ public final class GameScreen implements Screen {
         if (endScreen != null) endScreen.dispose();
         if (showcase != null) showcase.dispose();
         if (bot != null) bot.dispose();
+        if (netServer != null) netServer.close();
+        if (netClient != null) netClient.close();
         for (ItemEntity e : drops) e.dispose();
         drops.clear();
         ui.dispose();
         debug.dispose();
         skin.dispose();
+        if (botSkin != null && botSkin != skin) botSkin.dispose();
         modelBatch = null;
     }
 }

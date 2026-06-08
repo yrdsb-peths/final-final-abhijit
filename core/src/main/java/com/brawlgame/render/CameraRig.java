@@ -33,6 +33,8 @@ public final class CameraRig {
 
     private float bottomZ = Float.NaN; // world Z of the south boundary; NaN = feature disabled
     private float zoneT = 0f;          // smoothed 0..1 proximity factor
+    /** When true the camera sits on the north side of the player (client perspective in multiplayer). */
+    private boolean flipped = false;
 
     private final Vector3 target = new Vector3();
     private final Vector3 desiredPos = new Vector3();
@@ -62,6 +64,14 @@ public final class CameraRig {
         this.bottomZ = worldMaxZ;
     }
 
+    /**
+     * When {@code true} the camera orbits from the NORTH side of the player (negative-Z offset)
+     * instead of the default south side. Use for the client player in a multiplayer match so their
+     * character always appears at the bottom of the screen looking up toward the opponent.
+     * The 2D UI camera (UiViewport) is completely unaffected — it never rotates.
+     */
+    public void setFlipped(boolean flipped) { this.flipped = flipped; }
+
     /** Start a cinematic pan: camera begins at {@code fromPos} looking at {@code lookFrom}, then eases
      *  into the normal follow pose over {@code duration} seconds. */
     public void beginIntro(Vector3 fromPos, Vector3 lookFrom, float duration) {
@@ -87,10 +97,12 @@ public final class CameraRig {
         zoneT = MathUtils.lerp(zoneT, targetT, Math.min(1f, delta * ELEV_LERP));
 
         // Raise the camera and pull it overhead as we approach the wall (steeper pitch via lookAt).
+        // When flipped the camera sits on the north side so the client player appears at screen-bottom.
+        float zSign = flipped ? -1f : 1f;
         desiredPos.set(playerPos);
         desiredPos.x += OFFSET.x;
         desiredPos.y += OFFSET.y + zoneT * ELEV_EXTRA_Y;
-        desiredPos.z += OFFSET.z - zoneT * ELEV_PULL_Z;
+        desiredPos.z += (OFFSET.z - zoneT * ELEV_PULL_Z) * zSign;
 
         if (introT >= 0f && introT < introDur) {
             // Cinematic pan: ease from the far corner into the follow pose (slow → fast → settle).

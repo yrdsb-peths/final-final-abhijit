@@ -1,18 +1,31 @@
 package com.brawlgame;
 
 import com.badlogic.gdx.Game;
+import com.badlogic.gdx.Gdx;
+import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.screen.MainMenuScreen;
+import com.brawlgame.screen.TutorialScreen;
 
 /**
- * Application entry point. A thin {@link Game} that opens on the main menu, from which the developer
- * chooses "Test Player" (the Phase-1 gameplay sandbox) or "Map Maker" (the Brawl-Stars-style level
- * editor). Each mode is a self-contained {@link com.badlogic.gdx.Screen}.
+ * Application entry point. Checks whether this is the first ever launch (via {@link PlayerProfile}
+ * preferences) and either shows the card-based {@link TutorialScreen} or jumps straight to the
+ * {@link MainMenuScreen}.
  */
 public class DungeonGame extends Game {
 
     @Override
     public void create() {
-        setScreen(new MainMenuScreen(this));
+        // Ensure the local skins/ folder exists so SkinsScreen doesn't crash on a fresh install.
+        Gdx.files.local("skins").mkdirs();
+
+        // Initialise persisted profile (lazy singleton, safe to call now that Gdx.app is ready).
+        PlayerProfile profile = PlayerProfile.get();
+
+        if (profile.firstLaunch) {
+            setScreen(new TutorialScreen(this));
+        } else {
+            setScreen(new MainMenuScreen(this));
+        }
     }
 
     @Override

@@ -31,6 +31,7 @@ public final class EndScreenOverlay implements Disposable {
     private MatchManager.Outcome outcome = MatchManager.Outcome.NONE;
     private MatchStats playerStats, rivalStats;
     private float anim;
+    private float defeatFade; // 0→1: drives the red-tint + alpha-fade on the losing portrait
     private Runnable onProceed;
 
     public void bindShowcase(CharacterShowcase showcase, int playerIdx, int rivalIdx) {
@@ -45,6 +46,7 @@ public final class EndScreenOverlay implements Disposable {
         this.rivalStats = rival;
         this.onProceed = onProceed;
         this.anim = 0f;
+        this.defeatFade = 0f;
     }
 
     public boolean isVisible() { return outcome != MatchManager.Outcome.NONE; }
@@ -58,6 +60,7 @@ public final class EndScreenOverlay implements Disposable {
     public void update(float delta) {
         if (!isVisible()) return;
         anim = Math.min(1f, anim + delta * 1.8f);
+        defeatFade = Math.min(1f, defeatFade + delta * 0.65f); // gradual red tint + alpha fade
         if (Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) tryProceed();
         if (Gdx.input.justTouched()) {
             Vector2 m = uiv.unproject(Gdx.input.getX(), Gdx.input.getY());
@@ -140,7 +143,15 @@ public final class EndScreenOverlay implements Disposable {
         float px = cx - pw * 0.5f, py = h * 0.34f;
         float roll = won ? 0f : 14f;
         float spin = left ? -16f : 16f;
-        Color tint = won ? Color.WHITE : new Color(0.75f, 0.45f, 0.45f, 1f);
+        // Defeat: smoothly tint to pure red while fading alpha (sprite.setColor(1,0,0,alpha))
+        Color tint;
+        if (won || outcome == MatchManager.Outcome.DRAW) {
+            tint = Color.WHITE;
+        } else {
+            float g = MathUtils.lerp(1f, 0f, defeatFade);
+            float a = MathUtils.lerp(1f, 0.30f, defeatFade);
+            tint = new Color(1f, g, g, a);
+        }
 
         if (showcase != null) {
             showcase.render(uiv, showIdx, px, py, pw, ph, spin, roll, tint);

@@ -3,8 +3,8 @@ package com.brawlgame.entity;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
-import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.Material;
 import com.badlogic.gdx.graphics.g3d.Model;
@@ -45,14 +45,14 @@ public final class Player implements Disposable {
     private static final float TICK = 1f / 20f;
     private static final float GROUND_FRICTION = 0.91f * 0.6f; // 0.546
     private static final float AIR_FRICTION = 0.91f;
-    private static final float WALK_ACCEL = 0.095f;            // ~4.2 b/s — responsive but controllable in corridors
-    private static final float SPRINT_MUL = 1.30f;
+    private static final float WALK_ACCEL = 0.098f;            // → 4.317 b/s terminal at ground friction
+    private static final float SPRINT_MUL = 1.3f;
     private static final float SNEAK_MUL = 0.3f;
     private static final float AIR_ACCEL = 0.02f;
     private static final float GRAVITY = 0.08f;
     private static final float DRAG_Y = 0.98f;
     private static final float JUMP_V = 0.42f;
-    private static final float SPRINT_JUMP = 0.10f;
+    private static final float SPRINT_JUMP = 0.2f; // forward boost on sprint-jump — noticeably clears more ground
     private static final int MAX_TICKS_PER_FRAME = 5;
 
     private static final float TURN_RATE = 16f;
@@ -81,7 +81,7 @@ public final class Player implements Disposable {
     private float facingDeg = 0f;
     private float tickAcc = 0f;
 
-    private boolean jumpQueued = false;
+    private boolean jumpHeld = false;
 
     private final Vector3 wish = new Vector3(); // normalised world move direction this frame
 
@@ -205,6 +205,20 @@ public final class Player implements Disposable {
     public float getHealth()    { return health; }
     public float getMaxHealth() { return MAX_HEALTH; }
 
+    /** Apply an authoritative network snapshot for non-local rendering. */
+    public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated) {
+        pos.set(x, y, z);
+        prevPos.set(pos);
+        renderPos.set(pos);
+        vx = vy = vz = 0f;
+        knockVx = knockVz = 0f;
+        this.health = MathUtils.clamp(health, 0f, MAX_HEALTH);
+        this.facingDeg = facingDeg;
+        this.eliminated = eliminated || this.health <= 0f;
+        onGround = y <= 0.001f;
+        applyTransform();
+    }
+
     /** F3 debug god mode: free flight (Jump = up, Sneak = down, no gravity) + invulnerability. */
     public void setGodMode(boolean on) { this.godMode = on; }
     public boolean isGodMode() { return godMode; }
@@ -281,14 +295,16 @@ public final class Player implements Disposable {
         boolean moving = wish.len2() > 0.0001f;
         if (moving) wish.nor();
 
-        if (Gdx.input.isKeyJustPressed(cfg.key(Settings.Action.JUMP))) jumpQueued = true;
+        // Sneak on either shift key
         sneaking = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
             || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
 
-        // Ctrl = sprint (decoupled from jump so maze movement stays precise).
-        sprinting = moving && !sneaking
-            && (Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT)
-                || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT));
+        // Sprint-jump: holding Space while moving forward engages sprint + jump boost
+        // The sprint-jump boost clears more ground, so you can clear gaps while advancing.
+        jumpHeld = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+        float yawRad = facingDeg * MathUtils.degreesToRadians;
+        float forwardDot = wish.x * (-MathUtils.sin(yawRad)) + wish.z * (-MathUtils.cos(yawRad));
+        sprinting = moving && !sneaking && jumpHeld && forwardDot > 0.3f;
     }
 
     private void clampHorizontalSpeed(float maxPerTick) {
@@ -302,16 +318,14 @@ public final class Player implements Disposable {
 
     private void physicsTick() {
         if (godMode) { flyTick(); return; }
-        if (jumpQueued) {
-            if (onGround) {
-                vy = JUMP_V;
-                if (sprinting && wish.len2() > 0.0001f) {
-                    vx += wish.x * SPRINT_JUMP;
-                    vz += wish.z * SPRINT_JUMP;
-                }
-                onGround = false;
+        // Jump: fires whenever Space is held and we're grounded, so you can spam/hold to bunny-hop and chain sprint-jumps
+        if (jumpHeld && onGround) {
+            vy = JUMP_V;
+            if (sprinting && wish.len2() > 0.0001f) {
+                vx += wish.x * SPRINT_JUMP;
+                vz += wish.z * SPRINT_JUMP;
             }
-            jumpQueued = false;
+            onGround = false;
         }
 
         // horizontal: decay carried velocity by friction, then accelerate toward input
@@ -323,7 +337,7 @@ public final class Player implements Disposable {
             : AIR_ACCEL * (sprinting ? SPRINT_MUL : 1f);
         vx += wish.x * accel;
         vz += wish.z * accel;
-        clampHorizontalSpeed(onGround && sprinting ? 0.33f : (onGround ? 0.26f : 0.21f));
+        clampHorizontalSpeed(onGround && sprinting ? 0.13f : (onGround ? 0.20f : 0.17f));
 
         // Decay knockback independently — not affected by WASD, so hits feel weighty.
         knockVx *= KNOCK_FRICTION;

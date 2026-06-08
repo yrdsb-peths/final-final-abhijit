@@ -137,6 +137,8 @@ public final class PlayerUI implements InputProcessor, Disposable {
 
     public boolean isModalOpen() { return mode != Mode.NONE; }
     public boolean isCreative()  { return creativeMode; }
+    /** Enable creative inventory mode (press E opens the full item palette instead of survival bag). */
+    public void setCreativeMode(boolean creative) { this.creativeMode = creative; }
     public int selectedHotbar()  { return selectedHotbar; }
     public Inventory inventory() { return inv; }
 

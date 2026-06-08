@@ -7,6 +7,7 @@ import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
+import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.ui.Settings.Action;
 
 /**
@@ -18,7 +19,7 @@ import com.brawlgame.ui.Settings.Action;
  */
 public final class OptionsPanel {
 
-    private static final String[] TABS = {"Controls", "Sound"};
+    private static final String[] TABS = {"Controls", "Sound", "General"};
     /** Left column of the controls grid (general actions); the right column is the 9 hotbar slots. */
     private static final Action[] LEFT_COL = {
         Action.FORWARD, Action.BACKWARD, Action.LEFT, Action.RIGHT,
@@ -38,6 +39,7 @@ public final class OptionsPanel {
     private final float[] tabR = new float[TABS.length * 4];
     private float[] doneR = new float[4];
     private final float[] volR = new float[4];
+    private final float[] devToggleR = new float[4];
     private final EnumMap<Action, float[]> rowR = new EnumMap<>(Action.class);
 
     public void reset() { listening = null; draggingVol = false; }
@@ -57,6 +59,7 @@ public final class OptionsPanel {
             rowR.put(Settings.SLOTS[i], rect(rx, top - i * (rowH + gap), colW, rowH));
 
         set(volR, 0, px + 50f, top - 10f, pw - 100f, 34f);
+        devToggleR[0] = px + 50f; devToggleR[1] = top - 66f; devToggleR[2] = 120f; devToggleR[3] = 34f;
         doneR = rect(px + (pw - 200f) * 0.5f, py + 18f, 200f, 46f);
     }
 
@@ -78,8 +81,11 @@ public final class OptionsPanel {
                     : BedrockWidgets.BtnState.NORMAL;
                 BedrockWidgets.button(s, bx, r[1] + 3, KEY_W, r[3] - 6, st);
             }
-        } else {
+        } else if (tab == 1) {
             BedrockWidgets.slider(s, volR[0], volR[1], volR[2], volR[3], cfg.masterVolume);
+        } else {
+            // General tab: Dev Mode toggle
+            BedrockWidgets.toggle(s, devToggleR[0], devToggleR[1], devToggleR[2], devToggleR[3], PlayerProfile.get().devMode);
         }
         BedrockWidgets.button(s, doneR[0], doneR[1], doneR[2], doneR[3],
             in(doneR, mx, my) ? BedrockWidgets.BtnState.HOVER : BedrockWidgets.BtnState.NORMAL);
@@ -97,9 +103,17 @@ public final class OptionsPanel {
                 String t = listening == a ? "..." : cfg.keyName(a);
                 centerIn(b, font, t, r[0] + r[2] - KEY_W, r[1], KEY_W, r[3]);
             }
-        } else {
+        } else if (tab == 1) {
             font.setColor(BedrockWidgets.TEXT_DARK);
             font.draw(b, "Master Volume: " + Math.round(cfg.masterVolume * 100) + "%", volR[0], volR[1] + 54f);
+        } else {
+            font.setColor(BedrockWidgets.TEXT_DARK);
+            font.draw(b, "Developer Mode  [ " + (PlayerProfile.get().devMode ? "ON " : "OFF") + " ]",
+                devToggleR[0] + devToggleR[2] + 12f,
+                devToggleR[1] + devToggleR[3] * 0.5f + 6f);
+            font.setColor(0.65f, 0.65f, 0.68f, 1f);
+            font.draw(b, "Map Maker " + (PlayerProfile.get().devMode ? "visible" : "hidden"),
+                devToggleR[0] + devToggleR[2] + 12f, devToggleR[1] + devToggleR[3] * 0.5f - 10f);
         }
         font.setColor(BedrockWidgets.TEXT_LIGHT);
         centerIn(b, font, "Done", doneR[0], doneR[1], doneR[2], doneR[3]);
@@ -118,12 +132,16 @@ public final class OptionsPanel {
                     return false;
                 }
             }
-        } else if (in(volR, mx, my)) { draggingVol = true; drag(mx); }
+        } else if (tab == 1 && in(volR, mx, my)) { draggingVol = true; drag(mx); }
+        else if (tab == 2 && in(devToggleR, mx, my)) {
+            PlayerProfile.get().devMode = !PlayerProfile.get().devMode;
+            PlayerProfile.get().save();
+        }
         return false;
     }
 
     public void drag(float mx) {
-        if (draggingVol) cfg.masterVolume = clamp01((mx - volR[0]) / (volR[2] - volR[3]));
+        if (draggingVol) cfg.masterVolume = clamp01((mx - volR[0]) / volR[2]);
     }
 
     public void release() { draggingVol = false; }

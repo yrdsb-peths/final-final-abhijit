@@ -74,7 +74,8 @@ public final class GasZone implements Disposable {
         // ~6% shrink per phase, at least 25s apart on small boards; never more than one cell/sec slide.
         ringInterval = Math.max(25f, minDim * 2.8f);
         ringStep = Math.max(GameMap.CELL * 0.65f, minDim * 0.06f);
-        closeSpeed = Math.min(GameMap.CELL * 0.55f, ringStep / 4f);
+        // Faster close so the gas visibly catches up within seconds of a phase change.
+        closeSpeed = Math.max(GameMap.CELL * 1.5f, ringStep * 0.8f);
         minHalf = Math.max(GameMap.CELL * 1.5f, minDim * 0.10f);
 
         ModelBuilder mb = new ModelBuilder();
@@ -107,6 +108,21 @@ public final class GasZone implements Disposable {
 
     public boolean isActive() { return active; }
     public void activate() { active = true; }
+
+    /** Directly set where the gas should close toward (overrides internal ring-timer stepping). */
+    public void setTargetBounds(float minX, float maxX, float minZ, float maxZ) {
+        tgtMinX = MathUtils.clamp(minX, fullMinX, centerX);
+        tgtMaxX = MathUtils.clamp(maxX, centerX, fullMaxX);
+        tgtMinZ = MathUtils.clamp(minZ, fullMinZ, centerZ);
+        tgtMaxZ = MathUtils.clamp(maxZ, centerZ, fullMaxZ);
+    }
+
+    public float fullMinX() { return fullMinX; }
+    public float fullMaxX() { return fullMaxX; }
+    public float fullMinZ() { return fullMinZ; }
+    public float fullMaxZ() { return fullMaxZ; }
+    public float centerX()  { return centerX; }
+    public float centerZ()  { return centerZ; }
 
     /** Instantly collapse the safe zone to zero area — everything takes gas damage. */
     public void suddenDeath() {
