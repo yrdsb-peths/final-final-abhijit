@@ -32,12 +32,11 @@ import com.brawlgame.map.GameMap;
  */
 public final class GasZone implements Disposable {
 
-    // Every RING_INTERVAL the target ring steps inward by RING_STEP; the visible boundary then slides
-    // toward that target at CLOSE_SPEED (blocks/second), giving a smooth continuous close, not a snap.
-    private static final float RING_INTERVAL = 5.0f;
-    private static final float RING_STEP = 6f * GameMap.CELL;
-    private static final float CLOSE_SPEED = 2.2f * GameMap.CELL; // boundary travel rate, units/sec
-    private static final float MIN_HALF = 3f * GameMap.CELL;      // smallest centre box half-size
+    // Pacing is derived from map size in the constructor — small mazes get slow, gentle closes.
+    private final float ringInterval;
+    private final float ringStep;
+    private final float closeSpeed;
+    private final float minHalf;
     private static final float WALL_H = 6f;                       // gas curtain height (world units)
     private static final float WALL_T = 0.35f;                    // curtain thickness
 
@@ -51,6 +50,7 @@ public final class GasZone implements Disposable {
     // Target ring the live boundary is sliding toward.
     private float tgtMinX, tgtMaxX, tgtMinZ, tgtMaxZ;
     private boolean active;
+    private boolean suddenDeath;
     private float ringTimer, pulse;
 
     private final Model floorModel, wallModel;
@@ -67,6 +67,15 @@ public final class GasZone implements Disposable {
         centerZ = (fullMinZ + fullMaxZ) * 0.5f;
         safeMinX = tgtMinX = fullMinX; safeMaxX = tgtMaxX = fullMaxX;
         safeMinZ = tgtMinZ = fullMinZ; safeMaxZ = tgtMaxZ = fullMaxZ;
+
+        float mapW = fullMaxX - fullMinX;
+        float mapD = fullMaxZ - fullMinZ;
+        float minDim = Math.max(GameMap.CELL * 4f, Math.min(mapW, mapD));
+        // ~6% shrink per phase, at least 25s apart on small boards; never more than one cell/sec slide.
+        ringInterval = Math.max(25f, minDim * 2.8f);
+        ringStep = Math.max(GameMap.CELL * 0.65f, minDim * 0.06f);
+        closeSpeed = Math.min(GameMap.CELL * 0.55f, ringStep / 4f);
+        minHalf = Math.max(GameMap.CELL * 1.5f, minDim * 0.10f);
 
         ModelBuilder mb = new ModelBuilder();
 
@@ -99,8 +108,20 @@ public final class GasZone implements Disposable {
     public boolean isActive() { return active; }
     public void activate() { active = true; }
 
+    /** Instantly collapse the safe zone to zero area — everything takes gas damage. */
+    public void suddenDeath() {
+        suddenDeath = true;
+        safeMinX = safeMaxX = centerX;
+        safeMinZ = safeMaxZ = centerZ;
+        tgtMinX = tgtMaxX = centerX;
+        tgtMinZ = tgtMaxZ = centerZ;
+    }
+
+    public boolean isSuddenDeath() { return suddenDeath; }
+
     /** Outside the live safe rectangle = in the gas (pure coordinate test, no tile grid). */
     public boolean inGas(float x, float z) {
+        if (suddenDeath) return true;
         return x < safeMinX || x > safeMaxX || z < safeMinZ || z > safeMaxZ;
     }
 
@@ -110,16 +131,15 @@ public final class GasZone implements Disposable {
 
         // Step the TARGET ring inward on the interval (clamped to the centre box).
         ringTimer += delta;
-        if (ringTimer >= RING_INTERVAL) {
-            ringTimer -= RING_INTERVAL;
-            tgtMinX = Math.min(centerX - MIN_HALF, tgtMinX + RING_STEP);
-            tgtMaxX = Math.max(centerX + MIN_HALF, tgtMaxX - RING_STEP);
-            tgtMinZ = Math.min(centerZ - MIN_HALF, tgtMinZ + RING_STEP);
-            tgtMaxZ = Math.max(centerZ + MIN_HALF, tgtMaxZ - RING_STEP);
+        if (ringTimer >= ringInterval) {
+            ringTimer -= ringInterval;
+            tgtMinX = Math.min(centerX - minHalf, tgtMinX + ringStep);
+            tgtMaxX = Math.max(centerX + minHalf, tgtMaxX - ringStep);
+            tgtMinZ = Math.min(centerZ - minHalf, tgtMinZ + ringStep);
+            tgtMaxZ = Math.max(centerZ + minHalf, tgtMaxZ - ringStep);
         }
 
-        // Slide the LIVE boundary toward the target at a fixed rate → smooth continuous close.
-        float step = CLOSE_SPEED * delta;
+        float step = closeSpeed * delta;
         safeMinX = approach(safeMinX, tgtMinX, step);
         safeMaxX = approach(safeMaxX, tgtMaxX, step);
         safeMinZ = approach(safeMinZ, tgtMinZ, step);

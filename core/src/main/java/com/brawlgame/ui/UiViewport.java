@@ -49,6 +49,12 @@ public final class UiViewport {
         return viewport.unproject(tmp.set(screenX, screenY));
     }
 
+    /** Unproject into an existing vector (avoids allocation in hot paths). */
+    public Vector2 unproject(float screenX, float screenY, Vector2 out) {
+        viewport.unproject(out.set(screenX, screenY));
+        return out;
+    }
+
     /**
      * Map a virtual-canvas rect to a real window-pixel rect (y-up, bottom-left origin) — used to place a
      * scissored 3D sub-viewport (e.g. the inventory's rotating model) exactly where a 2D panel box sits.

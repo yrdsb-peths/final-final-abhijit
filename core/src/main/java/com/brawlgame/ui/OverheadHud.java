@@ -10,15 +10,13 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
 
 /**
- * A Brawl-Stars-style nameplate drawn in screen space directly above the player entity (the player's
- * chest world point is projected to the screen each frame). Top-to-bottom: <b>name</b>, <b>HP number</b>,
- * a thick <b>green health bar</b>, and a <b>segmented reload/ammo bar</b> whose segment count tracks the
- * equipped weapon. The reload bar depletes a segment per attack and refills over time. Replaces the old
- * screen-space hearts row.
+ * A Brawl-Stars-style nameplate drawn in screen space directly above entities. Uses the shared
+ * {@link UiViewport} so health bars, reload segments, and labels stay locked together on resize.
  */
 public final class OverheadHud implements Disposable {
 
@@ -29,73 +27,83 @@ public final class OverheadHud implements Disposable {
     private static final Color SEG_FILL = new Color(0.98f, 0.66f, 0.12f, 1f);
     private static final Color SEG_EMPTY = new Color(0.22f, 0.22f, 0.25f, 1f);
     private static final Color OUTLINE = new Color(0f, 0f, 0f, 0.9f);
+    private static final Color NAME = new Color(0.40f, 0.92f, 0.36f, 1f);
+    private static final Color BAR_LIGHT = new Color(0.85f, 0.85f, 0.88f, 1f);
+    private static final Color SEG_DRY = new Color(0.95f, 0.18f, 0.15f, 1f);
 
+    private static final float FLASH_TIME = 0.2f;
+    private static final float SHAKE_TIME = 0.18f;
+
+    private final UiViewport uiv = new UiViewport();
     private final ShapeRenderer shapes = new ShapeRenderer();
     private final SpriteBatch batch = new SpriteBatch();
     private final BitmapFont font = new BitmapFont();
     private final GlyphLayout gl = new GlyphLayout();
     private final Vector3 tmp = new Vector3();
+    private final Vector2 vc = new Vector2();
 
-    private static final Color SEG_DRY = new Color(0.95f, 0.18f, 0.15f, 1f); // out-of-ammo flash
-    private static final float FLASH_TIME = 0.2f;   // red flash duration on a dry trigger
-    private static final float SHAKE_TIME = 0.18f;  // ~10 frames of horizontal shake
-
-    // Ammo state is owned by the WeaponController (it gates attacks); the HUD just displays it. The
-    // left-most `loaded` of `capacity` segments are filled; a dry trigger flashes the bar red + shakes.
     private int loaded, capacity = 1;
-    private float flashTimer;   // >0 → bar flashes red (dry trigger)
-    private float shakeTimer;   // >0 → bar shakes on the X axis
-    private float shakeX;
+    private float flashTimer, shakeTimer, shakeX;
 
-    /**
-     * @param ammo     currently loaded segments (from the weapon).
-     * @param capacity total segments for the equipped weapon.
-     * @param dryFire  true on the frame the player clicked while empty.
-     */
     public void update(float delta, int ammo, int capacity, boolean dryFire) {
         this.loaded = ammo;
         this.capacity = Math.max(1, capacity);
         if (flashTimer > 0f) flashTimer -= delta;
         if (shakeTimer > 0f) {
             shakeTimer -= delta;
-            shakeX = MathUtils.random(-2f, 2f); // rapid X-axis jitter
+            shakeX = MathUtils.random(-2f, 2f);
         } else shakeX = 0f;
         if (dryFire) triggerEmptyShake();
     }
 
-    /** Enter the out-of-ammo state: red flash + a short, rapid horizontal shake. */
     public void triggerEmptyShake() { flashTimer = FLASH_TIME; shakeTimer = SHAKE_TIME; }
 
-    /**
-     * @param chestWorld a world point on the player (e.g. chest height) used to anchor the plate.
-     */
-    private static final Color NAME = new Color(0.40f, 0.92f, 0.36f, 1f); // bold Brawl green
-    private static final Color BAR_LIGHT = new Color(0.85f, 0.85f, 0.88f, 1f); // Bedrock bevel
+    /** Sync both rendering pipelines after a window resize — call from the screen's resize(). */
+    public void resize(int width, int height) {
+        uiv.resize(width, height);
+        syncMatrices();
+    }
+
+    private void syncMatrices() {
+        shapes.setProjectionMatrix(uiv.combined());
+        batch.setProjectionMatrix(uiv.combined());
+    }
+
+    private void beginHud() {
+        uiv.apply();
+        syncMatrices();
+        Gdx.gl.glEnable(GL20.GL_BLEND);
+        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    private void endHud() {
+        Gdx.gl.glDisable(GL20.GL_BLEND);
+    }
+
+    /** Project a world chest point into virtual-canvas coordinates. Returns false if behind camera. */
+    private boolean project(Camera cam, Vector3 world) {
+        tmp.set(world);
+        cam.project(tmp);
+        if (tmp.z > 1f) return false;
+        uiv.unproject(tmp.x, tmp.y, vc);
+        return true;
+    }
 
     public void render(Camera cam, Vector3 chestWorld, String name, float hp, float maxHp) {
-        tmp.set(chestWorld);
-        cam.project(tmp);
-        if (tmp.z > 1f) return; // behind the camera
+        if (!project(cam, chestWorld)) return;
+        beginHud();
 
-        float w = Gdx.graphics.getWidth(), h = Gdx.graphics.getHeight();
-        float cx = tmp.x, top = tmp.y + 60f;      // name baseline, hugging just above the head
+        float cx = vc.x, top = vc.y + 60f;
         float barX = cx - BAR_W * 0.5f;
         float hpBarY = top - 38f, segY = top - 54f;
 
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-        shapes.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
-        batch.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
-
         shapes.begin(ShapeType.Filled);
-        // health bar: dark outline → light Bedrock bevel → red back → green fill
         bedrockBar(barX, hpBarY, BAR_W, 14);
         shapes.setColor(HP_BACK); shapes.rect(barX, hpBarY, BAR_W, 14);
         shapes.setColor(HP_FILL); shapes.rect(barX, hpBarY, BAR_W * clamp01(hp / maxHp), 14);
-        // segmented reload bar (Brawl-Stars ammo): orange when loaded, dark when spent; the whole bar
-        // flashes red and shakes on the X axis when triggered dry. Each cell reads its own ammo state.
+
         int n = capacity;
-        float segX = barX + shakeX; // X-axis shake offset
+        float segX = barX + shakeX;
         float gap = 3f, segW = (BAR_W - (n - 1) * gap) / n;
         boolean flashing = flashTimer > 0f;
         bedrockBar(segX, segY, BAR_W, 9);
@@ -107,62 +115,53 @@ public final class OverheadHud implements Disposable {
         shapes.end();
 
         batch.begin();
-        outlined(name, cx, top, 1.15f, NAME);                                       // bold green name
-        outlined(Math.round(hp) + " / " + Math.round(maxHp), cx, top - 24f, 1.0f, Color.WHITE); // HP number
+        outlined(name, cx, top, 1.15f, NAME);
+        outlined(Math.round(hp) + " / " + Math.round(maxHp), cx, top - 24f, 1.0f, Color.WHITE);
         batch.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
+        endHud();
     }
 
-    /** A simpler nameplate for non-player entities (the bot): name + HP + green health bar, no reload bar. */
     public void renderSimple(Camera cam, Vector3 chestWorld, String name, float hp, float maxHp) {
-        tmp.set(chestWorld);
-        cam.project(tmp);
-        if (tmp.z > 1f) return;
-        float w = Gdx.graphics.getWidth(), h = Gdx.graphics.getHeight();
-        float cx = tmp.x, top = tmp.y + 54f;
+        if (!project(cam, chestWorld)) return;
+        beginHud();
+
+        float cx = vc.x, top = vc.y + 54f;
         float barX = cx - BAR_W * 0.5f, hpBarY = top - 36f;
 
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
-        shapes.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
-        batch.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
         shapes.begin(ShapeType.Filled);
         bedrockBar(barX, hpBarY, BAR_W, 14);
         shapes.setColor(HP_BACK); shapes.rect(barX, hpBarY, BAR_W, 14);
         shapes.setColor(HP_FILL); shapes.rect(barX, hpBarY, BAR_W * clamp01(hp / maxHp), 14);
         shapes.end();
+
         batch.begin();
-        outlined(name, cx, top, 1.0f, new Color(1f, 0.55f, 0.45f, 1f)); // rival = warm tint
+        outlined(name, cx, top, 1.0f, new Color(1f, 0.55f, 0.45f, 1f));
         outlined(Math.round(hp) + " / " + Math.round(maxHp), cx, top - 22f, 0.85f, Color.WHITE);
         batch.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
+        endHud();
     }
 
-    /** Top-left screen label (e.g. "Brawlers left: N"). */
+    /** Top-left label in virtual canvas space (e.g. "Brawlers left: N"). */
     public void renderLabel(String text) {
-        float w = Gdx.graphics.getWidth(), h = Gdx.graphics.getHeight();
-        Gdx.gl.glEnable(GL20.GL_BLEND);
-        batch.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
+        beginHud();
         batch.begin();
         font.getData().setScale(1.3f);
         font.setColor(0f, 0f, 0f, 0.9f);
-        font.draw(batch, text, 22f, h - 22f);
-        font.draw(batch, text, 24f, h - 22f);
+        font.draw(batch, text, 22f, uiv.height() - 22f);
+        font.draw(batch, text, 24f, uiv.height() - 22f);
         font.setColor(1f, 1f, 1f, 1f);
-        font.draw(batch, text, 23f, h - 21f);
+        font.draw(batch, text, 23f, uiv.height() - 21f);
         font.getData().setScale(1f);
         batch.end();
-        Gdx.gl.glDisable(GL20.GL_BLEND);
+        endHud();
     }
 
-    /** Dark outline + light bevel frame behind a status bar (Bedrock look). */
     private void bedrockBar(float x, float y, float w, float h) {
         shapes.setColor(OUTLINE); shapes.rect(x - 3, y - 3, w + 6, h + 6);
         shapes.setColor(BAR_LIGHT); shapes.rect(x - 2, y - 2, w + 4, h + 4);
         shapes.setColor(BACK); shapes.rect(x - 1, y - 1, w + 2, h + 2);
     }
 
-    /** Centre a string at {@code cx} with a heavy black outline, scaled, in {@code fill}. */
     private void outlined(String t, float cx, float baseY, float scale, Color fill) {
         font.getData().setScale(scale);
         gl.setText(font, t);

@@ -24,7 +24,10 @@ import com.brawlgame.entity.AiBrawler;
 import com.brawlgame.entity.ArmorRenderer;
 import com.brawlgame.entity.ItemEntity;
 import com.brawlgame.entity.Player;
+import com.brawlgame.game.MatchManager;
+import com.brawlgame.game.MatchStats;
 import com.brawlgame.gfx.AimCone;
+import com.brawlgame.gfx.AnimatedWaterRenderer;
 import com.brawlgame.gfx.GasZone;
 import com.brawlgame.gfx.GroundIndicator;
 import com.brawlgame.item.Inventory;
@@ -37,7 +40,9 @@ import com.brawlgame.map.MapRenderer;
 import com.brawlgame.map.SceneryRenderer;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
+import com.brawlgame.ui.CharacterShowcase;
 import com.brawlgame.ui.DamageVignette;
+import com.brawlgame.ui.EndScreenOverlay;
 import com.brawlgame.ui.MatchIntro;
 import com.brawlgame.ui.OverheadHud;
 import com.brawlgame.ui.PauseOverlay;
@@ -91,12 +96,20 @@ public final class GameScreen implements Screen {
     private MatchIntro matchIntro;
     private GasZone gas;
     private float gasDmgTimer = 0f;
-    private static final float GAS_DAMAGE = 6f, GAS_TICK = 0.5f;
+    private static final float GAS_DAMAGE = 3.5f, GAS_TICK = 0.8f;
     private AiBrawler bot;
     private int brawlersLeft = 2;
     private final Vector3 botPlatePos = new Vector3();
     private DebugRenderer debug;
     private boolean showDebug = false;
+    private AnimatedWaterRenderer water;
+    private MatchManager match;
+    private final MatchStats playerStats = new MatchStats("You");
+    private final MatchStats rivalStats = new MatchStats("Rival");
+    private EndScreenOverlay endScreen;
+    private CharacterShowcase showcase;
+    private int showcasePlayer, showcaseRival;
+    private boolean matchEnded;
 
     public GameScreen(Game game, GameMap map) {
         this.game = game;
@@ -143,15 +156,20 @@ public final class GameScreen implements Screen {
         float cornerX = sx <= 0f ? map.worldX(map.cols() - 1) : map.worldX(0);
         float cornerZ = sz <= 0f ? map.worldZ(map.rows() - 1) : map.worldZ(0);
         cameraRig.beginIntro(new Vector3(cornerX, 30f, cornerZ), new Vector3(0f, 1f, 0f), INTRO_DUR);
-        matchIntro = new MatchIntro(new Texture[] {skin, skin}, new String[] {"You", "Rival"}, INTRO_DUR);
         gas = new GasZone(map);
+        match = new MatchManager(gas, map);
+        water = new AnimatedWaterRenderer(map);
+        endScreen = new EndScreenOverlay();
 
-        // AI rival, spawned in the opposite quadrant; the player's melee resolves against it.
         float bMinX = map.worldX(1), bMaxX = map.worldX(map.cols() - 2);
         float bMinZ = map.worldZ(1), bMaxZ = map.worldZ(map.rows() - 2);
         bot = new AiBrawler(skin, sx <= 0f ? bMaxX * 0.6f : bMinX * 0.6f,
             sz <= 0f ? bMaxZ * 0.6f : bMinZ * 0.6f, bMinX, bMaxX, bMinZ, bMaxZ);
-        player.getWeapon().setTarget(bot); // melee swings resolve against the rival
+        player.getWeapon().setTarget(bot);
+        player.setMatchElimination(true);
+        player.setMatchStats(playerStats);
+        player.getWeapon().setDamageDealtListener(playerStats::addDamage);
+        bot.setMatchStats(rivalStats);
 
         // Solid-grid collider so the player, the rival, and potato projectiles collide with walls/fences.
         BlockCollider worldCollider = new BlockCollider() {
@@ -185,8 +203,15 @@ public final class GameScreen implements Screen {
         player.setHeldItemSupplier(ui::selectedItem);  // weapon follows the selected hotbar slot
         player.getWeapon().setIconResolver(ui::iconTexture); // armour/items shown held in the fist
         player.setInventory(inventory);                // worn armour feeds the damage formula
-        ui.setPreviewSkin(skin);                       // inventory's rotating 3D model
-        pause = new PauseOverlay(game, skin);          // ESC pause menu (3D model + options)
+        ui.setPreviewSkin(skin);
+        pause = new PauseOverlay(game, skin);
+
+        showcase = new CharacterShowcase();
+        showcasePlayer = showcase.add(skin, inventory);
+        showcaseRival = showcase.add(skin, bot.armorInventory());
+        matchIntro = new MatchIntro(showcase, new int[] {showcasePlayer, showcaseRival},
+            new String[] {"You", "Rival"}, INTRO_DUR);
+        endScreen.bindShowcase(showcase, showcasePlayer, showcaseRival);
 
         ui.setDropHandler(stack -> drops.add(new ItemEntity(stack, ui.iconTexture(stack.type),
             player.getPosition().x, player.getPosition().z, player.getFacingDeg())));
@@ -211,11 +236,20 @@ public final class GameScreen implements Screen {
         if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) player.setGodMode(!player.isGodMode()); // god mode (fly + invuln)
         if (Gdx.input.isKeyJustPressed(Input.Keys.F4)) gas.activate(); // force-start the gas
 
+        if (endScreen.isVisible()) {
+            endScreen.update(d);
+            renderWorld(d, true);
+            endScreen.render();
+            Settings.get().capFrame();
+            return;
+        }
+
         // Freeze world control while a panel or the pause menu is open.
         if (pause.isOpen()) pause.update(d);
-        boolean intro = cameraRig.isIntroActive(); // cinematic pan: gameplay frozen, camera still pans
+        boolean intro = cameraRig.isIntroActive();
         if (intro) matchIntro.update(d);
-        if (!ui.isModalOpen() && !pause.isOpen()) {
+        else if (!matchEnded) match.start();
+        if (!ui.isModalOpen() && !pause.isOpen() && !matchEnded) {
             if (!intro) player.update(d, cameraRig.camera);
             cameraRig.update(d, player.getPosition(), player.isSprinting());
             if (intro) { /* gameplay (drops, ammo, gas, bot) resumes once the intro finishes */ }
@@ -226,18 +260,18 @@ public final class GameScreen implements Screen {
             }
             WeaponController wc = player.getWeapon();
             overhead.update(d, wc.ammo(), wc.ammoCapacity(), wc.pollDryFire());
-            // Gas: close in + tick-damage anything caught outside the safe zone.
+            match.update(d);
+            water.update(d);
             gas.update(d);
             gasDmgTimer += d;
             boolean gasTick = gas.isActive() && gasDmgTimer >= GAS_TICK;
             if (gasTick) gasDmgTimer = 0f;
             if (gasTick && gas.inGas(player.getPosition().x, player.getPosition().z)) player.applyDamage(GAS_DAMAGE);
 
-            // AI rival: armoured, sword + potato-gun state machine. It deals melee/ranged hits (with
-            // knockback) to the player directly inside its update. Takes gas damage too.
             bot.update(d, player);
             if (gasTick && gas.inGas(bot.position().x, bot.position().z)) bot.damage(GAS_DAMAGE);
             if (bot.isDead() && brawlersLeft > 1) brawlersLeft = 1;
+            checkMatchEnd(gasTick);
             if (Settings.get().justPressed(Settings.Action.DROP)) {
                 ItemStack d2 = ui.takeOneFromSelectedHotbar();
                 if (d2 != null) drops.add(new ItemEntity(d2, ui.iconTexture(d2.type),
@@ -245,6 +279,10 @@ public final class GameScreen implements Screen {
             }
             } // end !intro gameplay
         }
+        renderWorld(d, intro);
+    }
+
+    private void renderWorld(float d, boolean intro) {
         renderer.rebuildIfDirty();
 
         boolean canShadow = shadowsEnabled && shadowLight != null && shadowLight.getFrameBuffer() != null;
@@ -263,66 +301,87 @@ public final class GameScreen implements Screen {
         Gdx.gl.glClearColor(0.53f, 0.74f, 0.92f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
-        // World pass: scenery + map blocks (the floor) first, then the translucent gas over the ground.
         modelBatch.begin(cameraRig.camera);
         scenery.render(modelBatch, environment);
         renderer.render(modelBatch, environment);
+        water.render(modelBatch, environment);
         gas.render(modelBatch, environment);
         modelBatch.end();
 
-        // Ground highlight rings: after the floor, before the characters, so they stand on top.
-        ground.renderPlayer(cameraRig.camera, player.getPosition().x, player.getPosition().z,
-            PLAYER_RING_RADIUS, player.getFacingDeg());
+        if (!intro && !matchEnded) {
+            ground.renderPlayer(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+                PLAYER_RING_RADIUS, player.getFacingDeg());
+        }
 
-        // Character pass: player model + worn armour + held weapon + projectiles.
         modelBatch.begin(cameraRig.camera);
-        player.render(modelBatch, environment);
-        armor.render(modelBatch, environment, player.getModelInstance()); // worn armour over the rig
+        if (!player.isEliminated()) {
+            player.render(modelBatch, environment);
+            armor.render(modelBatch, environment, player.getModelInstance());
+        }
         bot.render(modelBatch, environment);
         for (ItemEntity e : drops) e.render(modelBatch, environment);
         modelBatch.end();
 
-        // Ground aim reticle (cone for melee, rectangle for the gun), then the additive swoosh.
-        WeaponController w = player.getWeapon();
-        if (w.aimConeVisible()) {
-            if (w.getWeapon() == WeaponController.Weapon.GUN) {
-                aimCone.renderRect(cameraRig.camera, player.getPosition().x, player.getPosition().z,
-                    player.getFacingDeg(), GUN_AIM_HALF_WIDTH, w.coneRange());
-            } else {
-                aimCone.render(cameraRig.camera, player.getPosition().x, player.getPosition().z,
-                    player.getFacingDeg(), w.coneHalfAngle(), w.coneRange());
+        if (!intro && !matchEnded && !player.isEliminated()) {
+            WeaponController w = player.getWeapon();
+            if (w.aimConeVisible()) {
+                if (w.getWeapon() == WeaponController.Weapon.GUN) {
+                    aimCone.renderRect(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+                        player.getFacingDeg(), GUN_AIM_HALF_WIDTH, w.coneRange());
+                } else {
+                    aimCone.render(cameraRig.camera, player.getPosition().x, player.getPosition().z,
+                        player.getFacingDeg(), w.coneHalfAngle(), w.coneRange());
+                }
             }
+            player.renderTrail(cameraRig.camera);
         }
-        player.renderTrail(cameraRig.camera);
 
         if (showDebug) debug.render(cameraRig.camera, player);
 
-        // Brawl-Stars-style nameplate above the player — anchored at the live world Y so it follows jumps.
-        platePos.set(player.getPosition().x, player.getPosition().y + 2.2f, player.getPosition().z);
-        overhead.render(cameraRig.camera, platePos, "Player", player.getHealth(), player.getMaxHealth());
+        if (!player.isEliminated()) {
+            platePos.set(player.getPosition().x, player.getPosition().y + 2.2f, player.getPosition().z);
+            overhead.render(cameraRig.camera, platePos, "Player", player.getHealth(), player.getMaxHealth());
+        }
         if (!bot.isDead() && !bot.isDying()) {
             botPlatePos.set(bot.position().x, bot.position().y + 2.2f, bot.position().z);
             overhead.renderSimple(cameraRig.camera, botPlatePos, "Rival", bot.health(), bot.maxHealth());
         }
         overhead.renderLabel("Brawlers left: " + brawlersLeft);
-        vignette.renderFlash(player.getHurtFraction()); // full-screen red flash on a hit
-        vignette.render(player.getHurtFraction());       // + edge vignette for depth
+        if (!intro && !matchEnded) match.renderTimer();
+        vignette.renderFlash(player.getHurtFraction());
+        vignette.render(player.getHurtFraction());
         if (gas.isActive() && !player.isGodMode() && gas.inGas(player.getPosition().x, player.getPosition().z)) {
-            vignette.render(0.6f, 0.55f, 0.12f, 0.78f); // purple toxic tint while standing in the gas
+            vignette.render(0.6f, 0.55f, 0.12f, 0.78f);
         }
 
-        // HUD: hotbar always, plus the inventory/creative panel when open.
         ui.render();
+        if (!matchIntro.isDone()) matchIntro.render();
+        if (pause.isOpen()) pause.render();
+        Settings.get().capFrame();
+    }
 
-        if (!matchIntro.isDone()) matchIntro.render(); // intro character cards over the pan
-        if (pause.isOpen()) pause.render(); // pause overlay above the HUD
-        Settings.get().capFrame();           // honour the Options FPS limit
+    private void checkMatchEnd(boolean gasTick) {
+        boolean playerOut = player.isEliminated();
+        boolean rivalOut = bot.isDead();
+        if (!playerOut && !rivalOut) return;
+        match.registerDeath(playerOut, rivalOut);
+        if (playerOut && !rivalOut) rivalStats.addTakedown();
+        if (rivalOut && !playerOut) playerStats.addTakedown();
+        if (match.outcome() != MatchManager.Outcome.NONE && !matchEnded) {
+            matchEnded = true;
+            endScreen.show(match.outcome(), playerStats, rivalStats,
+                () -> game.setScreen(new MainMenuScreen(game)));
+        }
     }
 
     @Override
     public void resize(int width, int height) {
         if (cameraRig != null) cameraRig.resize(width, height);
         if (ui != null) ui.resize(width, height);
+        if (overhead != null) overhead.resize(width, height);
+        if (match != null) match.resize(width, height);
+        if (matchIntro != null) matchIntro.resize(width, height);
+        if (endScreen != null) endScreen.resize(width, height);
     }
 
     @Override public void pause() {}
@@ -348,6 +407,10 @@ public final class GameScreen implements Screen {
         vignette.dispose();
         if (matchIntro != null) matchIntro.dispose();
         if (gas != null) gas.dispose();
+        if (water != null) water.dispose();
+        if (match != null) match.dispose();
+        if (endScreen != null) endScreen.dispose();
+        if (showcase != null) showcase.dispose();
         if (bot != null) bot.dispose();
         for (ItemEntity e : drops) e.dispose();
         drops.clear();

@@ -48,6 +48,8 @@ public final class MapRenderer implements Disposable {
 
                 BlockType type = map.get(c, r);
                 if (type == null) continue;
+                // Water is rendered by AnimatedWaterRenderer (scrolling UV layers).
+                if (type.category() == BlockCategory.WATER) continue;
                 ModelInstance inst = lib.instance(type, map.worldX(c), map.worldZ(r));
                 if (inst == null) continue; // ERASER / unsupported
                 if (lib.isTransparent(type)) transparent.add(inst);

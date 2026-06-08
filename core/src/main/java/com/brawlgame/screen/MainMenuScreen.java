@@ -19,7 +19,7 @@ import com.brawlgame.ui.UiButton;
  */
 public final class MainMenuScreen implements Screen {
 
-    private static final String TITLE = "MINECRAFT DUNGEONS — MAP MAKER";
+    private static final String TITLE = "MINECRAFT DUNGEONS - MAP MAKER";
     private static final float BTN_W = 320f;
     private static final float BTN_H = 64f;
     private static final float BTN_GAP = 20f;

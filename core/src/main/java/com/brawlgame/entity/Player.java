@@ -20,6 +20,7 @@ import com.badlogic.gdx.utils.Disposable;
 import com.brawlgame.combat.ArmorStats;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
+import com.brawlgame.game.MatchStats;
 import com.brawlgame.item.Inventory;
 import com.brawlgame.ui.Settings;
 import com.brawlgame.item.ItemType;
@@ -44,14 +45,14 @@ public final class Player implements Disposable {
     private static final float TICK = 1f / 20f;
     private static final float GROUND_FRICTION = 0.91f * 0.6f; // 0.546
     private static final float AIR_FRICTION = 0.91f;
-    private static final float WALK_ACCEL = 0.098f;            // → 4.317 b/s terminal at ground friction
-    private static final float SPRINT_MUL = 1.3f;
+    private static final float WALK_ACCEL = 0.062f;            // ~2.7 b/s — tighter control in maze corridors
+    private static final float SPRINT_MUL = 1.12f;
     private static final float SNEAK_MUL = 0.3f;
     private static final float AIR_ACCEL = 0.02f;
     private static final float GRAVITY = 0.08f;
     private static final float DRAG_Y = 0.98f;
     private static final float JUMP_V = 0.42f;
-    private static final float SPRINT_JUMP = 0.2f;
+    private static final float SPRINT_JUMP = 0.10f;
     private static final int MAX_TICKS_PER_FRAME = 5;
 
     private static final float TURN_RATE = 16f;
@@ -80,7 +81,7 @@ public final class Player implements Disposable {
     private float facingDeg = 0f;
     private float tickAcc = 0f;
 
-    private boolean jumpHeld = false;
+    private boolean jumpQueued = false;
 
     private final Vector3 wish = new Vector3(); // normalised world move direction this frame
 
@@ -106,6 +107,9 @@ public final class Player implements Disposable {
     private boolean tinted = false;
     private final ColorAttribute hurtTint = ColorAttribute.createDiffuse(new Color(1f, 0f, 0f, 1f));
     private Inventory inventory; // worn armour is read from here for the reduction formula
+    private boolean matchElimination;
+    private boolean eliminated;
+    private MatchStats matchStats;
 
     public Player(Texture skin) {
         model = MinecraftPlayerModel.build(skin);
@@ -129,12 +133,17 @@ public final class Player implements Disposable {
         this.inventory = inventory;
     }
 
+    /** Showdown mode: death is permanent (no respawn) for the 1v1 end screen. */
+    public void setMatchElimination(boolean on) { this.matchElimination = on; }
+    public boolean isEliminated() { return eliminated; }
+    public void setMatchStats(MatchStats stats) { this.matchStats = stats; }
+
     /**
      * Take {@code raw} incoming damage, reduced by the currently worn armour (vanilla Java formula).
      * Pauses regen briefly; if health is depleted the player respawns at the origin with full health.
      */
     public void applyDamage(float raw) {
-        if (godMode) return; // invulnerable in god mode
+        if (godMode || eliminated) return;
         float dmg = inventory != null ? ArmorStats.reduce(raw, inventory) : raw;
         if (dmg <= 0f) return;
         health = Math.max(0f, health - dmg);
@@ -143,8 +152,13 @@ public final class Player implements Disposable {
         flashTimer = FLASH_DUR; // pure-red sprite tint ("heart shine")
         tinted = false;         // force re-tint on the next frame
         if (health <= 0f) {
-            health = MAX_HEALTH;
-            setSpawn(0f, 0f); // respawn at the arena origin
+            if (matchElimination) {
+                health = 0f;
+                eliminated = true;
+            } else {
+                health = MAX_HEALTH;
+                setSpawn(0f, 0f);
+            }
         }
     }
 
@@ -246,7 +260,11 @@ public final class Player implements Disposable {
 
         // Slow health regen once a moment has passed since the last hit (step off the hazard to recover).
         if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
-        else if (health < MAX_HEALTH) health = Math.min(MAX_HEALTH, health + REGEN_RATE * delta);
+        else if (health < MAX_HEALTH) {
+            float before = health;
+            health = Math.min(MAX_HEALTH, health + REGEN_RATE * delta);
+            if (matchStats != null) matchStats.addHealing(health - before);
+        }
 
         if (hurtTimer > 0f) hurtTimer = Math.max(0f, hurtTimer - delta);
         if (flashTimer > 0f) flashTimer = Math.max(0f, flashTimer - delta);
@@ -263,27 +281,37 @@ public final class Player implements Disposable {
         boolean moving = wish.len2() > 0.0001f;
         if (moving) wish.nor();
 
-        jumpHeld = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+        if (Gdx.input.isKeyJustPressed(cfg.key(Settings.Action.JUMP))) jumpQueued = true;
         sneaking = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
             || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
 
-        // No dedicated sprint key: holding/pressing Space while moving forward IS the sprint-jump.
-        // Engages only when moving roughly toward the aim, so you can't sprint-jump backwards.
-        float yawRad = facingDeg * MathUtils.degreesToRadians;
-        float forwardDot = wish.x * (-MathUtils.sin(yawRad)) + wish.z * (-MathUtils.cos(yawRad));
-        sprinting = moving && !sneaking && jumpHeld && forwardDot > 0.3f;
+        // Ctrl = sprint (decoupled from jump so maze movement stays precise).
+        sprinting = moving && !sneaking
+            && (Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT)
+                || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT));
+    }
+
+    private void clampHorizontalSpeed(float maxPerTick) {
+        float h = (float) Math.sqrt(vx * vx + vz * vz);
+        if (h > maxPerTick && h > 1e-5f) {
+            float s = maxPerTick / h;
+            vx *= s;
+            vz *= s;
+        }
     }
 
     private void physicsTick() {
         if (godMode) { flyTick(); return; }
-        // jump — fires whenever Space is held and we're grounded, so you can spam/hold to bunny-hop and chain sprint-jumps
-        if (jumpHeld && onGround) {
-            vy = JUMP_V;
-            if (sprinting && wish.len2() > 0.0001f) {
-                vx += wish.x * SPRINT_JUMP;
-                vz += wish.z * SPRINT_JUMP;
+        if (jumpQueued) {
+            if (onGround) {
+                vy = JUMP_V;
+                if (sprinting && wish.len2() > 0.0001f) {
+                    vx += wish.x * SPRINT_JUMP;
+                    vz += wish.z * SPRINT_JUMP;
+                }
+                onGround = false;
             }
-            onGround = false;
+            jumpQueued = false;
         }
 
         // horizontal: decay carried velocity by friction, then accelerate toward input
@@ -295,6 +323,7 @@ public final class Player implements Disposable {
             : AIR_ACCEL * (sprinting ? SPRINT_MUL : 1f);
         vx += wish.x * accel;
         vz += wish.z * accel;
+        clampHorizontalSpeed(onGround && sprinting ? 0.26f : (onGround ? 0.20f : 0.17f));
 
         // Decay knockback independently — not affected by WASD, so hits feel weighty.
         knockVx *= KNOCK_FRICTION;
@@ -331,7 +360,8 @@ public final class Player implements Disposable {
         vz += wish.z * accel;
         pos.x += vx; if (collider != null) resolveAxisX(vx);
         pos.z += vz; if (collider != null) resolveAxisZ(vz);
-        vy = (jumpHeld ? FLY_SPEED : 0f) - (sneaking ? FLY_SPEED : 0f);
+        vy = (Gdx.input.isKeyPressed(Settings.get().key(Settings.Action.JUMP)) ? FLY_SPEED : 0f)
+            - (sneaking ? FLY_SPEED : 0f);
         pos.y = Math.max(0f, pos.y + vy);
         onGround = pos.y <= 0.001f;
     }

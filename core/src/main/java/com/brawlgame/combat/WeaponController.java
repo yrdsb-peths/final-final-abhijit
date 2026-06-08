@@ -443,6 +443,17 @@ public final class WeaponController implements Disposable {
     /** The combat target the attacks resolve against (the dummy), set by the Player. */
     public void setTarget(CombatTarget target) { this.target = target; }
 
+    /** Optional callback so match stats can track damage dealt by the player. */
+    public void setDamageDealtListener(java.util.function.Consumer<Float> listener) {
+        this.damageDealtListener = listener;
+    }
+
+    private java.util.function.Consumer<Float> damageDealtListener;
+
+    private void reportDamage(float dmg) {
+        if (damageDealtListener != null && dmg > 0f) damageDealtListener.accept(dmg);
+    }
+
     /** Optional world collider so potato projectiles stop on walls/fences (null = no walls). */
     public void setCollider(BlockCollider collider) { this.collider = collider; }
 
@@ -481,9 +492,11 @@ public final class WeaponController implements Disposable {
         float fwdX = -MathUtils.sin(fr), fwdZ = -MathUtils.cos(fr);
         float dist = (float) Math.sqrt(dist2);
         float dot = (dx * fwdX + dz * fwdZ) / dist;
-        if (dot < MathUtils.cosDeg(halfDeg)) return false; // outside the swing arc
+        if (dot < MathUtils.cosDeg(halfDeg)) return false;
+        if (!CombatLoS.clear(collider, aimX, aimZ, tp.x, tp.z)) return false;
         hitDir.set(dx, 0f, dz).nor();
         target.onHit(dmg, hitDir, crit);
+        reportDamage(dmg);
         return true;
     }
 
@@ -560,9 +573,11 @@ public final class WeaponController implements Disposable {
                 Vector3 tp = target.position();
                 float dx = tp.x - p.position().x, dz = tp.z - p.position().z;
                 float hr = target.radius() + 0.3f;
-                if (dx * dx + dz * dz < hr * hr && p.position().y > 0.3f && p.position().y < 2.2f) {
+                if (dx * dx + dz * dz < hr * hr && p.position().y > 0.3f && p.position().y < 2.2f
+                    && CombatLoS.clear(collider, p.position().x, p.position().z, tp.x, tp.z)) {
                     hitDir.set(dx, 0f, dz).nor();
-                    target.onHit(GUN_DMG, hitDir, false); // ranged shots don't crit
+                    target.onHit(GUN_DMG, hitDir, false);
+                    reportDamage(GUN_DMG);
                     impactFx.burst(p.position(), 12);
                     p.destroy();
                     continue;
