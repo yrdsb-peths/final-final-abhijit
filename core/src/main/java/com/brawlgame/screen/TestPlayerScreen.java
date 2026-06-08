@@ -1,5 +1,9 @@
 package com.brawlgame.screen;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
@@ -15,6 +19,7 @@ import com.brawlgame.combat.WeaponController;
 import com.brawlgame.entity.ArmorRenderer;
 import com.brawlgame.entity.ChestEntity;
 import com.brawlgame.entity.CombatDummy;
+import com.brawlgame.entity.ItemEntity;
 import com.brawlgame.entity.Player;
 import com.brawlgame.entity.SpikeHazard;
 import com.brawlgame.gfx.AimCone;
@@ -25,7 +30,11 @@ import com.brawlgame.item.ItemType;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
 import com.brawlgame.render.GridRenderer;
+import com.brawlgame.ui.DamageVignette;
+import com.brawlgame.ui.OverheadHud;
+import com.brawlgame.ui.PauseOverlay;
 import com.brawlgame.ui.PlayerUI;
+import com.brawlgame.ui.Settings;
 
 /**
  * The "Test Player" mode — Phase 1 of the game lifted verbatim into a {@link Screen}: an accurate,
@@ -56,6 +65,12 @@ public final class TestPlayerScreen implements Screen {
     private Inventory inventory;
     private ArmorRenderer armor;
     private SpikeHazard hazard;
+    private PauseOverlay pause;
+    private InputMultiplexer uiMux;
+    private final List<ItemEntity> drops = new ArrayList<>(); // items dropped out of the inventory
+    private final OverheadHud overhead = new OverheadHud();    // Brawl-style nameplate above the player
+    private final DamageVignette vignette = new DamageVignette(); // red screen edges when hurt
+    private final com.badlogic.gdx.math.Vector3 platePos = new com.badlogic.gdx.math.Vector3();
     private Texture skin, chestWood, chestGold;
 
     public TestPlayerScreen(Game game) {
@@ -108,24 +123,36 @@ public final class TestPlayerScreen implements Screen {
         ui = new PlayerUI(inventory);
         armor = new ArmorRenderer(inventory); // worn pieces, parented to the player's rig bones
         player.setHeldItemSupplier(ui::selectedItem); // weapon follows the selected hotbar slot
+        player.getWeapon().setIconResolver(ui::iconTexture); // armour/items are shown held in the fist
         player.setInventory(inventory); // worn armour feeds the damage-reduction formula
+        ui.setPreviewSkin(skin);        // rotating 3D model in the inventory reflects equipped armour
 
         // A spike pad in front of spawn: step on it to take 10 raw damage/tick, reduced by your armour.
         hazard = new SpikeHazard(-2.5f, -1.5f);
 
+        pause = new PauseOverlay(game, skin); // ESC pause menu (3D model + Bedrock buttons + options)
+
+        // Drag an item out of the inventory panel → spawn it as a world entity at the player's feet.
+        ui.setDropHandler(stack -> drops.add(new ItemEntity(stack, ui.iconTexture(stack.type),
+            player.getPosition().x, player.getPosition().z, player.getFacingDeg())));
+
         // UI gets first dibs on clicks/keys; the world polls the rest.
-        Gdx.input.setInputProcessor(new InputMultiplexer(ui));
+        uiMux = new InputMultiplexer(ui);
+        Gdx.input.setInputProcessor(uiMux);
     }
 
     @Override
     public void render(float deltaTime) {
         float delta = Math.min(deltaTime, 1f / 30f);
 
-        // Esc closes an open panel first; only exits to the menu when nothing is open.
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+        // Esc: close an open inventory panel first, otherwise open the pause overlay (the overlay owns
+        // its own Esc once open). Route input to the pause overlay while it's up.
+        if (!pause.isOpen() && Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             if (ui.isModalOpen()) ui.closeModal();
-            else { game.setScreen(new MainMenuScreen(game)); return; }
+            else pause.open();
         }
+        if (pause.isOpen() && Gdx.input.getInputProcessor() != pause) Gdx.input.setInputProcessor(pause);
+        else if (!pause.isOpen() && Gdx.input.getInputProcessor() != uiMux) Gdx.input.setInputProcessor(uiMux);
         if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) showDebug = !showDebug;
 
         // Local-player hover highlight on the chest, and R-to-open within range.
@@ -135,16 +162,30 @@ public final class TestPlayerScreen implements Screen {
             ui.openChest(chest.slots(), "Chest");
         }
 
-        // Freeze world control while a panel is open (clicks/keys belong to the UI).
-        if (!ui.isModalOpen()) {
+        // Freeze world control while a panel or the pause menu is open.
+        if (pause.isOpen()) pause.update(delta);
+        if (!ui.isModalOpen() && !pause.isOpen()) {
             player.update(delta, cameraRig.camera);
             dummy.update(delta, player.getPosition());
             cameraRig.update(delta, player.getPosition(), player.isSprinting());
             // Spike pad: applies raw damage when stood on; the player's armour reduces it.
             float raw = hazard.update(delta, player.getPosition());
             if (raw > 0f) player.applyDamage(raw);
+            // Dropped items: tumble + settle, and get picked back up on contact.
+            for (Iterator<ItemEntity> it = drops.iterator(); it.hasNext(); ) {
+                ItemEntity e = it.next();
+                if (e.update(delta, player.getPosition())) { inventory.add(e.stack()); e.dispose(); it.remove(); }
+            }
+            // Overhead reload bar reflects the weapon's live ammo (the weapon owns the ammo + gating).
+            WeaponController wc = player.getWeapon();
+            overhead.update(delta, wc.ammo(), wc.ammoCapacity(), wc.pollDryFire());
+            // Drop the selected item into the world (Q by default), tossed in the facing direction.
+            if (Settings.get().justPressed(Settings.Action.DROP)) {
+                ItemStack d = ui.takeOneFromSelectedHotbar();
+                if (d != null) drops.add(new ItemEntity(d, ui.iconTexture(d.type),
+                    player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
+            }
         }
-        ui.setHealth(player.getHealth(), player.getMaxHealth()); // hearts row follows current health
 
         Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         Gdx.gl.glClearColor(0.039f, 0.043f, 0.055f, 1f); // near-black void
@@ -167,6 +208,7 @@ public final class TestPlayerScreen implements Screen {
         dummy.render(modelBatch, environment);
         player.render(modelBatch, environment);
         armor.render(modelBatch, environment, player.getModelInstance()); // worn armour over the rig
+        for (ItemEntity e : drops) e.render(modelBatch, environment); // spinning dropped items
         modelBatch.end();
 
         // Ground aim reticle (the cone/rectangle), then the additive swoosh — both over the scene.
@@ -184,13 +226,23 @@ public final class TestPlayerScreen implements Screen {
 
         if (showDebug) debug.render(cameraRig.camera, player);
 
+        // Brawl-Stars-style nameplate floating above the player (name / HP / health bar / reload bar).
+        // Anchor at the player's live world Y + head height so the plate rises/falls when jumping.
+        platePos.set(player.getPosition().x, player.getPosition().y + 2.2f, player.getPosition().z);
+        overhead.render(cameraRig.camera, platePos, "Player", player.getHealth(), player.getMaxHealth());
+        vignette.render(player.getHurtFraction()); // red screen edges when the player is hurt
+
         // HUD on top of everything: hotbar always, plus the inventory/creative/chest panel when open.
         ui.render();
+
+        if (pause.isOpen()) pause.render(); // pause overlay sits above the HUD
+        Settings.get().capFrame();           // honour the Options FPS limit
     }
 
     @Override
     public void resize(int width, int height) {
         if (cameraRig != null) cameraRig.resize(width, height);
+        if (ui != null) ui.resize(width, height);
     }
 
     @Override public void pause() {}
@@ -211,6 +263,11 @@ public final class TestPlayerScreen implements Screen {
         ground.dispose();
         armor.dispose();
         hazard.dispose();
+        pause.dispose();
+        overhead.dispose();
+        vignette.dispose();
+        for (ItemEntity e : drops) e.dispose();
+        drops.clear();
         ui.dispose();
         chestWood.dispose();
         chestGold.dispose();

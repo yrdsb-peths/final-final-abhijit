@@ -48,14 +48,10 @@ public final class UiButton {
         this.hovered = h;
     }
 
-    /** Draws the rounded filled background. Assumes {@code shapes} is begun in {@code Filled} mode. */
+    /** Draws the flat Bedrock button background. Assumes {@code shapes} is begun in {@code Filled} mode. */
     public void renderBackground(ShapeRenderer shapes) {
-        if (hovered) {
-            shapes.setColor(0.35f, 0.40f, 0.50f, 1f);
-        } else {
-            shapes.setColor(0.18f, 0.20f, 0.26f, 1f);
-        }
-        roundedRect(shapes, x, y, w, h, 8f);
+        BedrockWidgets.button(shapes, x, y, w, h,
+            hovered ? BedrockWidgets.BtnState.HOVER : BedrockWidgets.BtnState.NORMAL);
     }
 
     /** Draws the centred label. Assumes {@code batch} is already begun. */

@@ -1,5 +1,9 @@
 package com.brawlgame.screen;
 
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
@@ -16,8 +20,12 @@ import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.math.Vector3;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
+import com.brawlgame.entity.AiBrawler;
+import com.brawlgame.entity.ArmorRenderer;
+import com.brawlgame.entity.ItemEntity;
 import com.brawlgame.entity.Player;
 import com.brawlgame.gfx.AimCone;
+import com.brawlgame.gfx.GasZone;
 import com.brawlgame.gfx.GroundIndicator;
 import com.brawlgame.item.Inventory;
 import com.brawlgame.item.ItemStack;
@@ -29,7 +37,12 @@ import com.brawlgame.map.MapRenderer;
 import com.brawlgame.map.SceneryRenderer;
 import com.brawlgame.render.CameraRig;
 import com.brawlgame.render.DebugRenderer;
+import com.brawlgame.ui.DamageVignette;
+import com.brawlgame.ui.MatchIntro;
+import com.brawlgame.ui.OverheadHud;
+import com.brawlgame.ui.PauseOverlay;
 import com.brawlgame.ui.PlayerUI;
+import com.brawlgame.ui.Settings;
 
 /**
  * Plays a saved custom map. It rebuilds the map's blocks + decorative canyon, lights the scene with
@@ -67,6 +80,21 @@ public final class GameScreen implements Screen {
     private GroundIndicator ground;
     private PlayerUI ui;
     private Inventory inventory;
+    private ArmorRenderer armor;
+    private PauseOverlay pause;
+    private InputMultiplexer uiMux;
+    private final List<ItemEntity> drops = new ArrayList<>();
+    private final OverheadHud overhead = new OverheadHud();
+    private final DamageVignette vignette = new DamageVignette();
+    private final Vector3 platePos = new Vector3();
+    private static final float INTRO_DUR = 3.2f;
+    private MatchIntro matchIntro;
+    private GasZone gas;
+    private float gasDmgTimer = 0f;
+    private static final float GAS_DAMAGE = 6f, GAS_TICK = 0.5f;
+    private AiBrawler bot;
+    private int brawlersLeft = 2;
+    private final Vector3 botPlatePos = new Vector3();
     private DebugRenderer debug;
     private boolean showDebug = false;
 
@@ -111,8 +139,22 @@ public final class GameScreen implements Screen {
         float sz = sp != null ? map.worldZ(sp[1]) : 0f;
         player.setSpawn(sx, sz);
 
-        // Solid-grid collider so the player and potato projectiles collide with walls/fences.
-        player.setCollider(new BlockCollider() {
+        // Match intro: pan the camera from the corner diagonally opposite the player into the follow pose.
+        float cornerX = sx <= 0f ? map.worldX(map.cols() - 1) : map.worldX(0);
+        float cornerZ = sz <= 0f ? map.worldZ(map.rows() - 1) : map.worldZ(0);
+        cameraRig.beginIntro(new Vector3(cornerX, 30f, cornerZ), new Vector3(0f, 1f, 0f), INTRO_DUR);
+        matchIntro = new MatchIntro(new Texture[] {skin, skin}, new String[] {"You", "Rival"}, INTRO_DUR);
+        gas = new GasZone(map);
+
+        // AI rival, spawned in the opposite quadrant; the player's melee resolves against it.
+        float bMinX = map.worldX(1), bMaxX = map.worldX(map.cols() - 2);
+        float bMinZ = map.worldZ(1), bMaxZ = map.worldZ(map.rows() - 2);
+        bot = new AiBrawler(skin, sx <= 0f ? bMaxX * 0.6f : bMinX * 0.6f,
+            sz <= 0f ? bMaxZ * 0.6f : bMinZ * 0.6f, bMinX, bMaxX, bMinZ, bMaxZ);
+        player.getWeapon().setTarget(bot); // melee swings resolve against the rival
+
+        // Solid-grid collider so the player, the rival, and potato projectiles collide with walls/fences.
+        BlockCollider worldCollider = new BlockCollider() {
             @Override public int colAt(float x) { return map.colAt(x); }
             @Override public int rowAt(float z) { return map.rowAt(z); }
             @Override public float cellCenterX(int col) { return map.worldX(col); }
@@ -122,7 +164,9 @@ public final class GameScreen implements Screen {
                 BlockType t = map.get(col, row);
                 return t == null ? 0f : t.collisionHeight();
             }
-        });
+        };
+        player.setCollider(worldCollider);
+        bot.setCollider(worldCollider);
 
         aimCone = new AimCone();
         ground = new GroundIndicator();
@@ -131,11 +175,25 @@ public final class GameScreen implements Screen {
         inventory.set(Inventory.HOTBAR_BASE + 0, new ItemStack(ItemType.DIAMOND_SWORD));
         inventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN));
         inventory.set(Inventory.HOTBAR_BASE + 2, new ItemStack(ItemType.IRON_SWORD));
+        // Equip a diamond set so worn armour is visible on the map (swap via the creative menu, /).
+        inventory.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
+        inventory.set(Inventory.ARMOR_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
+        inventory.set(Inventory.ARMOR_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
+        inventory.set(Inventory.ARMOR_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
         ui = new PlayerUI(inventory);
-        player.setHeldItemSupplier(ui::selectedItem); // weapon follows the selected hotbar slot
+        armor = new ArmorRenderer(inventory);          // worn armour parented to the rig
+        player.setHeldItemSupplier(ui::selectedItem);  // weapon follows the selected hotbar slot
+        player.getWeapon().setIconResolver(ui::iconTexture); // armour/items shown held in the fist
+        player.setInventory(inventory);                // worn armour feeds the damage formula
+        ui.setPreviewSkin(skin);                       // inventory's rotating 3D model
+        pause = new PauseOverlay(game, skin);          // ESC pause menu (3D model + options)
+
+        ui.setDropHandler(stack -> drops.add(new ItemEntity(stack, ui.iconTexture(stack.type),
+            player.getPosition().x, player.getPosition().z, player.getFacingDeg())));
 
         // UI gets first dibs on clicks/keys; the world polls the rest.
-        Gdx.input.setInputProcessor(new InputMultiplexer(ui));
+        uiMux = new InputMultiplexer(ui);
+        Gdx.input.setInputProcessor(uiMux);
 
         debug = new DebugRenderer();
     }
@@ -143,17 +201,49 @@ public final class GameScreen implements Screen {
     @Override
     public void render(float delta) {
         float d = Math.min(delta, 1f / 30f);
-        // Esc closes an open panel first; only exits to the menu when nothing is open.
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
+        // Esc: close an open panel first, else open the pause overlay (which then owns Esc).
+        if (!pause.isOpen() && Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) {
             if (ui.isModalOpen()) ui.closeModal();
-            else { game.setScreen(new MainMenuScreen(game)); return; }
+            else pause.open();
         }
-        if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) showDebug = !showDebug;
+        if (pause.isOpen() && Gdx.input.getInputProcessor() != pause) Gdx.input.setInputProcessor(pause);
+        else if (!pause.isOpen() && Gdx.input.getInputProcessor() != uiMux) Gdx.input.setInputProcessor(uiMux);
+        if (Gdx.input.isKeyJustPressed(Input.Keys.F3)) player.setGodMode(!player.isGodMode()); // god mode (fly + invuln)
+        if (Gdx.input.isKeyJustPressed(Input.Keys.F4)) gas.activate(); // force-start the gas
 
-        // Freeze world control while a panel is open (clicks/keys belong to the UI).
-        if (!ui.isModalOpen()) {
-            player.update(d, cameraRig.camera);
+        // Freeze world control while a panel or the pause menu is open.
+        if (pause.isOpen()) pause.update(d);
+        boolean intro = cameraRig.isIntroActive(); // cinematic pan: gameplay frozen, camera still pans
+        if (intro) matchIntro.update(d);
+        if (!ui.isModalOpen() && !pause.isOpen()) {
+            if (!intro) player.update(d, cameraRig.camera);
             cameraRig.update(d, player.getPosition(), player.isSprinting());
+            if (intro) { /* gameplay (drops, ammo, gas, bot) resumes once the intro finishes */ }
+            else {
+            for (Iterator<ItemEntity> it = drops.iterator(); it.hasNext(); ) {
+                ItemEntity e = it.next();
+                if (e.update(d, player.getPosition())) { inventory.add(e.stack()); e.dispose(); it.remove(); }
+            }
+            WeaponController wc = player.getWeapon();
+            overhead.update(d, wc.ammo(), wc.ammoCapacity(), wc.pollDryFire());
+            // Gas: close in + tick-damage anything caught outside the safe zone.
+            gas.update(d);
+            gasDmgTimer += d;
+            boolean gasTick = gas.isActive() && gasDmgTimer >= GAS_TICK;
+            if (gasTick) gasDmgTimer = 0f;
+            if (gasTick && gas.inGas(player.getPosition().x, player.getPosition().z)) player.applyDamage(GAS_DAMAGE);
+
+            // AI rival: armoured, sword + potato-gun state machine. It deals melee/ranged hits (with
+            // knockback) to the player directly inside its update. Takes gas damage too.
+            bot.update(d, player);
+            if (gasTick && gas.inGas(bot.position().x, bot.position().z)) bot.damage(GAS_DAMAGE);
+            if (bot.isDead() && brawlersLeft > 1) brawlersLeft = 1;
+            if (Settings.get().justPressed(Settings.Action.DROP)) {
+                ItemStack d2 = ui.takeOneFromSelectedHotbar();
+                if (d2 != null) drops.add(new ItemEntity(d2, ui.iconTexture(d2.type),
+                    player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
+            }
+            } // end !intro gameplay
         }
         renderer.rebuildIfDirty();
 
@@ -173,19 +263,23 @@ public final class GameScreen implements Screen {
         Gdx.gl.glClearColor(0.53f, 0.74f, 0.92f, 1f);
         Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT | GL20.GL_DEPTH_BUFFER_BIT);
 
-        // World pass: scenery + map blocks (the floor) first.
+        // World pass: scenery + map blocks (the floor) first, then the translucent gas over the ground.
         modelBatch.begin(cameraRig.camera);
         scenery.render(modelBatch, environment);
         renderer.render(modelBatch, environment);
+        gas.render(modelBatch, environment);
         modelBatch.end();
 
         // Ground highlight rings: after the floor, before the characters, so they stand on top.
         ground.renderPlayer(cameraRig.camera, player.getPosition().x, player.getPosition().z,
             PLAYER_RING_RADIUS, player.getFacingDeg());
 
-        // Character pass: player model + held weapon + projectiles.
+        // Character pass: player model + worn armour + held weapon + projectiles.
         modelBatch.begin(cameraRig.camera);
         player.render(modelBatch, environment);
+        armor.render(modelBatch, environment, player.getModelInstance()); // worn armour over the rig
+        bot.render(modelBatch, environment);
+        for (ItemEntity e : drops) e.render(modelBatch, environment);
         modelBatch.end();
 
         // Ground aim reticle (cone for melee, rectangle for the gun), then the additive swoosh.
@@ -203,13 +297,32 @@ public final class GameScreen implements Screen {
 
         if (showDebug) debug.render(cameraRig.camera, player);
 
+        // Brawl-Stars-style nameplate above the player — anchored at the live world Y so it follows jumps.
+        platePos.set(player.getPosition().x, player.getPosition().y + 2.2f, player.getPosition().z);
+        overhead.render(cameraRig.camera, platePos, "Player", player.getHealth(), player.getMaxHealth());
+        if (!bot.isDead() && !bot.isDying()) {
+            botPlatePos.set(bot.position().x, bot.position().y + 2.2f, bot.position().z);
+            overhead.renderSimple(cameraRig.camera, botPlatePos, "Rival", bot.health(), bot.maxHealth());
+        }
+        overhead.renderLabel("Brawlers left: " + brawlersLeft);
+        vignette.renderFlash(player.getHurtFraction()); // full-screen red flash on a hit
+        vignette.render(player.getHurtFraction());       // + edge vignette for depth
+        if (gas.isActive() && !player.isGodMode() && gas.inGas(player.getPosition().x, player.getPosition().z)) {
+            vignette.render(0.6f, 0.55f, 0.12f, 0.78f); // purple toxic tint while standing in the gas
+        }
+
         // HUD: hotbar always, plus the inventory/creative panel when open.
         ui.render();
+
+        if (!matchIntro.isDone()) matchIntro.render(); // intro character cards over the pan
+        if (pause.isOpen()) pause.render(); // pause overlay above the HUD
+        Settings.get().capFrame();           // honour the Options FPS limit
     }
 
     @Override
     public void resize(int width, int height) {
         if (cameraRig != null) cameraRig.resize(width, height);
+        if (ui != null) ui.resize(width, height);
     }
 
     @Override public void pause() {}
@@ -229,6 +342,15 @@ public final class GameScreen implements Screen {
         player.dispose();
         aimCone.dispose();
         ground.dispose();
+        armor.dispose();
+        pause.dispose();
+        overhead.dispose();
+        vignette.dispose();
+        if (matchIntro != null) matchIntro.dispose();
+        if (gas != null) gas.dispose();
+        if (bot != null) bot.dispose();
+        for (ItemEntity e : drops) e.dispose();
+        drops.clear();
         ui.dispose();
         debug.dispose();
         skin.dispose();

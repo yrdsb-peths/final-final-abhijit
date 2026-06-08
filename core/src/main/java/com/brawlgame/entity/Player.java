@@ -4,10 +4,13 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g3d.Environment;
+import com.badlogic.gdx.graphics.g3d.Material;
 import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
+import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
@@ -18,6 +21,7 @@ import com.brawlgame.combat.ArmorStats;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
 import com.brawlgame.item.Inventory;
+import com.brawlgame.ui.Settings;
 import com.brawlgame.item.ItemType;
 import com.brawlgame.model.MinecraftPlayerModel;
 import com.brawlgame.model.PlayerAnimator;
@@ -70,6 +74,7 @@ public final class Player implements Disposable {
     private final Vector3 prevPos = new Vector3();
     private final Vector3 renderPos = new Vector3();
     private float vx, vy, vz;
+    private float knockVx, knockVz; // knockback that decays independently of WASD input
     private boolean onGround = true;
     private boolean sprinting, sneaking;
     private float facingDeg = 0f;
@@ -85,9 +90,21 @@ public final class Player implements Disposable {
     // ---- health + armour-reduced damage ----
     private static final float MAX_HEALTH = 20f;     // 10 hearts, vanilla
     private static final float REGEN_RATE = 1f;      // HP/sec recovered when not recently hit
-    private static final float REGEN_DELAY = 1.5f;   // seconds after a hit before regen resumes
+    private static final float REGEN_DELAY = 2.0f;   // seconds after a hit before regen resumes
+    private static final float HURT_DUR = 0.45f;     // screen-vignette/full-flash duration on a hit
+    private static final float FLASH_DUR = 0.2f;     // pure-red sprite tint duration ("heart shine")
+    // Knockback impulse (per-tick blocks). A separate knockback vector is maintained so WASD input
+    // cannot instantly cancel the impulse; it decays on its own at KNOCK_FRICTION per tick.
+    private static final float KB_H = 0.42f, KB_UP = 0.36f;
+    private static final float KNOCK_FRICTION = 0.75f; // ~50% remaining after 2.4 ticks, gone after ~0.4 s
     private float health = MAX_HEALTH;
     private float regenCooldown = 0f;
+    private boolean godMode = false;     // F3 debug: free flight + invulnerable
+    private static final float FLY_SPEED = 0.25f; // vertical fly speed (blocks/tick)
+    private float hurtTimer = 0f;
+    private float flashTimer = 0f;
+    private boolean tinted = false;
+    private final ColorAttribute hurtTint = ColorAttribute.createDiffuse(new Color(1f, 0f, 0f, 1f));
     private Inventory inventory; // worn armour is read from here for the reduction formula
 
     public Player(Texture skin) {
@@ -117,17 +134,68 @@ public final class Player implements Disposable {
      * Pauses regen briefly; if health is depleted the player respawns at the origin with full health.
      */
     public void applyDamage(float raw) {
+        if (godMode) return; // invulnerable in god mode
         float dmg = inventory != null ? ArmorStats.reduce(raw, inventory) : raw;
+        if (dmg <= 0f) return;
         health = Math.max(0f, health - dmg);
         regenCooldown = REGEN_DELAY;
+        hurtTimer = HURT_DUR;   // drives the screen-edge vignette + full-screen flash
+        flashTimer = FLASH_DUR; // pure-red sprite tint ("heart shine")
+        tinted = false;         // force re-tint on the next frame
         if (health <= 0f) {
             health = MAX_HEALTH;
             setSpawn(0f, 0f); // respawn at the arena origin
         }
     }
 
+    /**
+     * Take a directional hit: damage + a knockback impulse away from the attacker. {@code fromDir} is
+     * the normalised horizontal direction from the attacker TOWARD the player (the push direction).
+     */
+    public void applyHit(float raw, Vector3 fromDir) {
+        applyHit(raw, fromDir, KB_H);
+    }
+
+    /** Directional hit with a caller-chosen knockback strength (e.g. a heavier crit knock). */
+    public void applyHit(float raw, Vector3 fromDir, float knockStrength) {
+        applyDamage(raw);
+        applyKnockback(fromDir.x, fromDir.z, knockStrength);
+    }
+
+    /**
+     * Add a sudden velocity burst in (dirX,dirZ) — vanilla knockback: halve the carried horizontal
+     * velocity, add the impulse, and pop up off the ground. Friction bleeds it off over ~0.5s.
+     */
+    public void applyKnockback(float dirX, float dirZ, float strength) {
+        if (godMode) return;
+        float len = (float) Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (len < 1e-4f) return;
+        dirX /= len; dirZ /= len;
+        // Write into the dedicated knockback vector so WASD input cannot cancel it immediately.
+        knockVx = dirX * strength;
+        knockVz = dirZ * strength;
+        if (onGround) { vy = KB_UP; onGround = false; }
+    }
+
+    /** Tints the player model red while hurt (same reaction as the combat dummy). */
+    private void applyHurtTint() {
+        boolean hurt = flashTimer > 0f; // pure-red sprite tint for the brief "heart shine" window
+        if (hurt == tinted) return; // only touch materials on a state change
+        tinted = hurt;
+        for (Material m : instance.materials) {
+            if (hurt) m.set(hurtTint);
+            else m.remove(ColorAttribute.Diffuse);
+        }
+    }
+
     public float getHealth()    { return health; }
     public float getMaxHealth() { return MAX_HEALTH; }
+
+    /** F3 debug god mode: free flight (Jump = up, Sneak = down, no gravity) + invulnerability. */
+    public void setGodMode(boolean on) { this.godMode = on; }
+    public boolean isGodMode() { return godMode; }
+    /** 0 = not hurt, 1 = just hit — drives the red screen vignette. */
+    public float getHurtFraction() { return Math.max(0f, hurtTimer / HURT_DUR); }
 
     /** Supplies the solid grid for movement collision (and forwards it to the weapon for projectiles). */
     public void setCollider(BlockCollider collider) {
@@ -141,6 +209,7 @@ public final class Player implements Disposable {
         prevPos.set(pos);
         renderPos.set(pos);
         vx = vy = vz = 0f;
+        knockVx = knockVz = 0f;
         onGround = true;
         applyTransform();
     }
@@ -178,18 +247,23 @@ public final class Player implements Disposable {
         // Slow health regen once a moment has passed since the last hit (step off the hazard to recover).
         if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
         else if (health < MAX_HEALTH) health = Math.min(MAX_HEALTH, health + REGEN_RATE * delta);
+
+        if (hurtTimer > 0f) hurtTimer = Math.max(0f, hurtTimer - delta);
+        if (flashTimer > 0f) flashTimer = Math.max(0f, flashTimer - delta);
+        applyHurtTint(); // pure-red flash while hurt
     }
 
     private void readInput() {
+        Settings cfg = Settings.get();
         wish.set(0f, 0f, 0f);
-        if (Gdx.input.isKeyPressed(Input.Keys.W)) wish.z -= 1f;
-        if (Gdx.input.isKeyPressed(Input.Keys.S)) wish.z += 1f;
-        if (Gdx.input.isKeyPressed(Input.Keys.A)) wish.x -= 1f;
-        if (Gdx.input.isKeyPressed(Input.Keys.D)) wish.x += 1f;
+        if (Gdx.input.isKeyPressed(cfg.key(Settings.Action.FORWARD)))  wish.z -= 1f;
+        if (Gdx.input.isKeyPressed(cfg.key(Settings.Action.BACKWARD))) wish.z += 1f;
+        if (Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT)))     wish.x -= 1f;
+        if (Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT)))    wish.x += 1f;
         boolean moving = wish.len2() > 0.0001f;
         if (moving) wish.nor();
 
-        jumpHeld = Gdx.input.isKeyPressed(Input.Keys.SPACE);
+        jumpHeld = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
         sneaking = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
             || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
 
@@ -201,6 +275,7 @@ public final class Player implements Disposable {
     }
 
     private void physicsTick() {
+        if (godMode) { flyTick(); return; }
         // jump — fires whenever Space is held and we're grounded, so you can spam/hold to bunny-hop and chain sprint-jumps
         if (jumpHeld && onGround) {
             vy = JUMP_V;
@@ -221,12 +296,17 @@ public final class Player implements Disposable {
         vx += wish.x * accel;
         vz += wish.z * accel;
 
+        // Decay knockback independently — not affected by WASD, so hits feel weighty.
+        knockVx *= KNOCK_FRICTION;
+        knockVz *= KNOCK_FRICTION;
+
         // integrate — resolve horizontal collisions per-axis so sliding along walls feels natural;
         // vertical (jumps) is unaffected since the arena has no ceilings.
-        pos.x += vx;
-        if (collider != null) resolveAxisX();
-        pos.z += vz;
-        if (collider != null) resolveAxisZ();
+        float mvx = vx + knockVx, mvz = vz + knockVz;
+        pos.x += mvx;
+        if (collider != null) resolveAxisX(mvx);
+        pos.z += mvz;
+        if (collider != null) resolveAxisZ(mvz);
         pos.y += vy;
 
         // gravity for the next tick (applied after the move, like Minecraft)
@@ -242,8 +322,22 @@ public final class Player implements Disposable {
         }
     }
 
+    /** God-mode flight: no gravity; Jump rises, Sneak descends; horizontal movement as normal. */
+    private void flyTick() {
+        vx *= GROUND_FRICTION;
+        vz *= GROUND_FRICTION;
+        float accel = WALK_ACCEL * 1.7f; // a touch faster to roam the map
+        vx += wish.x * accel;
+        vz += wish.z * accel;
+        pos.x += vx; if (collider != null) resolveAxisX(vx);
+        pos.z += vz; if (collider != null) resolveAxisZ(vz);
+        vy = (jumpHeld ? FLY_SPEED : 0f) - (sneaking ? FLY_SPEED : 0f);
+        pos.y = Math.max(0f, pos.y + vy);
+        onGround = pos.y <= 0.001f;
+    }
+
     /** Push the player out of any solid cell it now overlaps along X, and kill X velocity there. */
-    private void resolveAxisX() {
+    private void resolveAxisX(float mvx) {
         float half = HITBOX_W * 0.5f;
         float cellHalf = collider.cellSize() * 0.5f;
         float minZ = pos.z - half, maxZ = pos.z + half;
@@ -256,16 +350,16 @@ public final class Player implements Disposable {
                 float cMinZ = collider.cellCenterZ(r) - cellHalf, cMaxZ = collider.cellCenterZ(r) + cellHalf;
                 if (pos.x + half <= cMinX || pos.x - half >= cMaxX) continue;
                 if (pos.z + half <= cMinZ || pos.z - half >= cMaxZ) continue;
-                if (vx > 0f) pos.x = cMinX - half;
-                else if (vx < 0f) pos.x = cMaxX + half;
+                if (mvx > 0f) pos.x = cMinX - half;
+                else if (mvx < 0f) pos.x = cMaxX + half;
                 else pos.x += (pos.x < collider.cellCenterX(c)) ? (cMinX - half - pos.x) : (cMaxX + half - pos.x);
-                vx = 0f;
+                vx = 0f; knockVx = 0f;
             }
         }
     }
 
     /** Push the player out of any solid cell it now overlaps along Z, and kill Z velocity there. */
-    private void resolveAxisZ() {
+    private void resolveAxisZ(float mvz) {
         float half = HITBOX_W * 0.5f;
         float cellHalf = collider.cellSize() * 0.5f;
         float minX = pos.x - half, maxX = pos.x + half;
@@ -278,10 +372,10 @@ public final class Player implements Disposable {
                 float cMinZ = collider.cellCenterZ(r) - cellHalf, cMaxZ = collider.cellCenterZ(r) + cellHalf;
                 if (pos.x + half <= cMinX || pos.x - half >= cMaxX) continue;
                 if (pos.z + half <= cMinZ || pos.z - half >= cMaxZ) continue;
-                if (vz > 0f) pos.z = cMinZ - half;
-                else if (vz < 0f) pos.z = cMaxZ + half;
+                if (mvz > 0f) pos.z = cMinZ - half;
+                else if (mvz < 0f) pos.z = cMaxZ + half;
                 else pos.z += (pos.z < collider.cellCenterZ(r)) ? (cMinZ - half - pos.z) : (cMaxZ + half - pos.z);
-                vz = 0f;
+                vz = 0f; knockVz = 0f;
             }
         }
     }

@@ -8,17 +8,27 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.graphics.g2d.TextureRegion;
+import com.badlogic.gdx.graphics.g3d.Environment;
+import com.badlogic.gdx.graphics.g3d.Model;
+import com.badlogic.gdx.graphics.g3d.ModelBatch;
+import com.badlogic.gdx.graphics.g3d.ModelInstance;
+import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
+import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
+import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
+import com.brawlgame.entity.ArmorRenderer;
 import com.brawlgame.item.Inventory;
 import com.brawlgame.item.ItemStack;
 import com.brawlgame.item.ItemType;
+import com.brawlgame.model.MinecraftPlayerModel;
 
 /**
  * The in-game player UI and its input router, rendered in a strict Minecraft <b>Bedrock</b> style with
@@ -72,6 +82,16 @@ public final class PlayerUI implements InputProcessor, Disposable {
     };
     private static final String[] TAB_LABELS = {"Combat", "Armor"};
 
+    /** The full 18-item whitelist shown in the creative palette (exactly fills a 2×9 grid). */
+    private static final ItemType[] CREATIVE_ITEMS = {
+        ItemType.WOOD_SWORD, ItemType.STONE_SWORD, ItemType.IRON_SWORD, ItemType.GOLD_SWORD,
+        ItemType.DIAMOND_SWORD, ItemType.POTATO_GUN,
+        ItemType.LEATHER_HELMET, ItemType.LEATHER_CHESTPLATE, ItemType.LEATHER_LEGGINGS,
+        ItemType.IRON_HELMET, ItemType.IRON_CHESTPLATE, ItemType.IRON_LEGGINGS,
+        ItemType.DIAMOND_HELMET, ItemType.DIAMOND_CHESTPLATE, ItemType.DIAMOND_LEGGINGS,
+        ItemType.LEATHER_BOOTS, ItemType.IRON_BOOTS, ItemType.DIAMOND_BOOTS,
+    };
+
     private static final class Slot {
         final float x, y, size;
         final int store, index;
@@ -88,6 +108,16 @@ public final class PlayerUI implements InputProcessor, Disposable {
     private final BitmapFont font = new BitmapFont();
     private final GlyphLayout layout = new GlyphLayout();
     private final ItemIcons icons = new ItemIcons();
+    private final UiViewport uiv = new UiViewport(); // virtual canvas → aspect-locked, resize-proof UI
+
+    // ---- rotating 3D preview model shown in the inventory (reflects equipped armour) ----
+    private ModelBatch previewBatch;
+    private PerspectiveCamera previewCam;
+    private Environment previewEnv;
+    private Model previewModel;
+    private ModelInstance previewInstance;
+    private ArmorRenderer previewArmor;
+    private float previewSpin;
 
     private Mode mode = Mode.NONE;
     private boolean creativeMode;
@@ -97,26 +127,9 @@ public final class PlayerUI implements InputProcessor, Disposable {
     private ItemStack carried;
     private ItemStack[] chestSlots;
     private String chestTitle = "Chest";
+    private java.util.function.Consumer<ItemStack> dropHandler; // drag-out → spawn into world
 
-    // ---- health bar (hearts) ----
-    private static final Color HEART_EMPTY = new Color(0.16f, 0.10f, 0.10f, 0.85f);
-    private final Texture heartTex;
-    private final TextureRegion heartFull, heartHalf;
-    private float health = 20f, maxHealth = 20f;
-
-    public PlayerUI(Inventory inv) {
-        this.inv = inv;
-        heartTex = new Texture(Gdx.files.internal("textures/fx/heart.png"));
-        heartTex.setFilter(Texture.TextureFilter.Nearest, Texture.TextureFilter.Nearest);
-        heartFull = new TextureRegion(heartTex);
-        heartHalf = new TextureRegion(heartTex, 0, 0, heartTex.getWidth() / 2, heartTex.getHeight());
-    }
-
-    /** Feed the player's current/max health each frame so the hotbar can draw the hearts row. */
-    public void setHealth(float current, float max) {
-        this.health = current;
-        this.maxHealth = max;
-    }
+    public PlayerUI(Inventory inv) { this.inv = inv; }
 
     private static Color rgb(int r, int g, int b) { return new Color(r / 255f, g / 255f, b / 255f, 1f); }
 
@@ -146,23 +159,44 @@ public final class PlayerUI implements InputProcessor, Disposable {
         mode = Mode.NONE;
     }
 
+    /** The screen sets this so an item dragged out of the panel is spawned into the world (not deleted). */
+    public void setDropHandler(java.util.function.Consumer<ItemStack> handler) { this.dropHandler = handler; }
+
+    /** The cached icon texture for an item type (used by world drop entities). */
+    public Texture iconTexture(ItemType type) { return icons.get(type); }
+
+    /** Drop the carried stack into the world via the drop handler (a no-op clear if none is set). */
+    private void dropCarried() {
+        if (carried != null && dropHandler != null) dropHandler.accept(carried);
+        carried = null;
+    }
+
     private ItemType[] tabItems() { return creativeTab == 0 ? COMBAT : ARMOR; }
 
     // ---------------------------------------------------------------- InputProcessor (routing)
 
     @Override
     public boolean keyDown(int keycode) {
-        if (keycode == Input.Keys.SLASH) { creativeMode = !creativeMode; return true; }
-        if (keycode == Input.Keys.E) {
+        Settings cfg = Settings.get();
+        if (keycode == cfg.key(Settings.Action.INVENTORY)) {
             if (mode == Mode.NONE) mode = creativeMode ? Mode.CREATIVE : Mode.INVENTORY;
             else closeModal();
             return true;
         }
-        if (keycode >= Input.Keys.NUM_1 && keycode <= Input.Keys.NUM_9) { // strictly hotbar selection
-            selectedHotbar = keycode - Input.Keys.NUM_1;
-            return true;
+        for (int i = 0; i < Settings.SLOTS.length; i++) { // hotbar slot select (rebindable)
+            if (keycode == cfg.key(Settings.SLOTS[i])) { selectedHotbar = i; return true; }
         }
-        return false; // Esc, WASD, etc. fall through to the screen/world.
+        return false; // Esc, WASD, drop, etc. fall through to the screen/world.
+    }
+
+    /** Remove one item from the selected hotbar slot and return it as a 1-count stack (or null). */
+    public ItemStack takeOneFromSelectedHotbar() {
+        ItemStack s = inv.hotbar(selectedHotbar);
+        if (s == null) return null;
+        ItemStack one = new ItemStack(s.type, 1);
+        s.count -= 1;
+        if (s.count <= 0) inv.set(Inventory.HOTBAR_BASE + selectedHotbar, null);
+        return one;
     }
 
     @Override
@@ -190,22 +224,13 @@ public final class PlayerUI implements InputProcessor, Disposable {
     // ---------------------------------------------------------------- click → move items / tabs
 
     private void handleClick(int screenX, int screenY) {
-        float mx = screenX, my = Gdx.graphics.getHeight() - screenY;
-
-        if (mode == Mode.CREATIVE) {
-            float[] tr = tabRects();
-            for (int i = 0; i < TAB_LABELS.length; i++) {
-                if (mx >= tr[i * 4] && mx <= tr[i * 4] + tr[i * 4 + 2]
-                        && my >= tr[i * 4 + 1] && my <= tr[i * 4 + 1] + tr[i * 4 + 3]) {
-                    creativeTab = i; carried = null; return;
-                }
-            }
-        }
+        Vector2 m = uiv.unproject(screenX, screenY);
+        float mx = m.x, my = m.y;
 
         Slot s = null;
         for (Slot cand : buildSlots()) if (cand.hit(mx, my)) { s = cand; break; }
-        if (s == null) { carried = null; return; }
-        if (s.store == STORE_CREATIVE) { carried = new ItemStack(tabItems()[s.index], 1); return; }
+        if (s == null) { dropCarried(); return; }
+        if (s.store == STORE_CREATIVE) { carried = new ItemStack(CREATIVE_ITEMS[s.index], 1); return; }
 
         ItemStack target = read(s);
         if (carried == null) {
@@ -249,16 +274,22 @@ public final class PlayerUI implements InputProcessor, Disposable {
         float px = P[0], py = P[1], pw = P[2], ph = P[3];
 
         if (mode == Mode.CREATIVE) {
-            ItemType[] items = tabItems();
-            float gx = px + 20f + tabColW() + 14f;
-            float gyTop = py + ph - 56f;
-            int cols = Math.max(1, (int) ((px + pw - 16f - gx) / (SLOT + PAD)));
-            for (int i = 0; i < items.length; i++) {
-                int c = i % cols, r = i / cols;
-                out.add(new Slot(gx + c * (SLOT + PAD), gyTop - SLOT - r * (SLOT + PAD), SLOT, STORE_CREATIVE, i));
+            // Clean 2×9 = 18-slot palette of the whole whitelist, the 4 armour slots in a column to its
+            // left, and the hotbar row beneath — matching the Bedrock inventory reference.
+            float gridW = 9 * SLOT + 8 * PAD;
+            float gx = px + (pw - gridW) * 0.5f + 40f;   // shifted right to leave the armour column room
+            float topY = py + ph - 70f - SLOT;
+            for (int i = 0; i < CREATIVE_ITEMS.length; i++) {
+                int c = i % 9, r = i / 9;
+                out.add(new Slot(gx + c * (SLOT + PAD), topY - r * (SLOT + PAD), SLOT, STORE_CREATIVE, i));
             }
-            // Player hotbar row along the bottom, so picked items can be dragged straight onto it.
-            addRow(out, gx, py + 18f, Inventory.HOTBAR, STORE_INV, Inventory.HOTBAR_BASE);
+            // Armour column on the left (helmet/chest/legs/boots).
+            float armX = px + 26f, armTop = topY;
+            for (int i = 0; i < Inventory.ARMOR; i++) {
+                out.add(new Slot(armX, armTop - i * (SLOT + PAD), SLOT, STORE_INV, Inventory.ARMOR_BASE + i));
+            }
+            // Hotbar row along the bottom, so picked items can be dragged straight onto it.
+            addRow(out, gx, py + 22f, Inventory.HOTBAR, STORE_INV, Inventory.HOTBAR_BASE);
             return out;
         }
 
@@ -304,7 +335,7 @@ public final class PlayerUI implements InputProcessor, Disposable {
     }
 
     private float[] panelRect() {
-        float w = Gdx.graphics.getWidth(), h = Gdx.graphics.getHeight();
+        float w = UiViewport.W, h = UiViewport.H;
         if (mode == Mode.CREATIVE) {
             float pw = Math.min(w * 0.84f, 1040f), ph = Math.min(h * 0.82f, 660f);
             return new float[] {(w - pw) * 0.5f, (h - ph) * 0.5f, pw, ph};
@@ -315,11 +346,53 @@ public final class PlayerUI implements InputProcessor, Disposable {
 
     // ---------------------------------------------------------------- render
 
+    /** Keep the virtual-canvas viewport aligned to the window — call from the screen's resize(). */
+    public void resize(int width, int height) { uiv.resize(width, height); }
+
+    /** Provide the skin so the inventory can render a rotating 3D model of the player + worn armour. */
+    public void setPreviewSkin(Texture skin) {
+        if (previewModel != null) return;
+        previewBatch = new ModelBatch();
+        previewEnv = new Environment();
+        previewEnv.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.72f, 0.72f, 0.76f, 1f));
+        previewEnv.add(new DirectionalLight().set(0.55f, 0.55f, 0.55f, -0.5f, -0.7f, -0.6f));
+        previewCam = new PerspectiveCamera(33f, 1f, 1f);
+        previewCam.near = 0.1f; previewCam.far = 30f;
+        previewModel = MinecraftPlayerModel.build(skin);
+        previewInstance = new ModelInstance(previewModel);
+        previewInstance.calculateTransforms();
+        previewArmor = new ArmorRenderer(inv); // reads the live inventory → reflects equipped armour
+    }
+
+    /** Render the rotating 3D model in the inventory's portrait box (rect in virtual canvas coords). */
+    private void renderPreviewModel(float vx, float vy, float vw, float vh) {
+        if (previewModel == null) return;
+        previewSpin = (previewSpin + Gdx.graphics.getDeltaTime() * 32f) % 360f;
+        float[] r = uiv.toScreen(vx, vy, vw, vh);
+        int rx = (int) r[0], ry = (int) r[1], rw = (int) r[2], rh = (int) r[3];
+        if (rw <= 0 || rh <= 0) return;
+        Gdx.gl.glViewport(rx, ry, rw, rh);
+        Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST);
+        Gdx.gl.glScissor(rx, ry, rw, rh);
+        Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT);
+        // Frame the whole figure (feet at 0 → armoured helmet top ~2.1) so nothing is clipped.
+        PreviewCamera.frame(previewCam, rw, rh, 0f, 2.1f, 0.55f);
+        previewInstance.transform.setToRotation(Vector3.Y, previewSpin);
+        previewBatch.begin(previewCam);
+        previewBatch.render(previewInstance, previewEnv);
+        previewArmor.render(previewBatch, previewEnv, previewInstance);
+        previewBatch.end();
+        Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST);
+        Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+    }
+
     public void render() {
-        float w = Gdx.graphics.getWidth(), h = Gdx.graphics.getHeight();
-        float mx = Gdx.input.getX(), my = h - Gdx.input.getY();
-        shapes.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
-        batch.getProjectionMatrix().setToOrtho2D(0, 0, w, h);
+        float w = UiViewport.W, h = UiViewport.H;
+        Vector2 m = uiv.unproject(Gdx.input.getX(), Gdx.input.getY());
+        float mx = m.x, my = m.y;
+        uiv.apply();
+        shapes.setProjectionMatrix(uiv.combined());
+        batch.setProjectionMatrix(uiv.combined());
 
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
@@ -344,27 +417,7 @@ public final class PlayerUI implements InputProcessor, Disposable {
         for (int i = 0; i < Inventory.HOTBAR; i++) {
             drawStack(inv.hotbar(i), x0 + i * (HB_SLOT + HB_PAD), y, HB_SLOT);
         }
-        drawHearts(x0, y + HB_SLOT + 12f, barW);
-        batch.setColor(Color.WHITE);
         batch.end();
-    }
-
-    /** Minecraft-style row of hearts above the hotbar (each heart = 2 HP; half hearts for odd points). */
-    private void drawHearts(float x0, float y, float barW) {
-        int hearts = Math.max(1, Math.round(maxHealth / 2f));
-        float size = 26f, gap = 2f;
-        float totalW = hearts * size + (hearts - 1) * gap;
-        float left = x0 + (barW - totalW) * 0.5f; // centred over the hotbar
-        // Empty heart sockets first (dark), then the filled red hearts on top.
-        batch.setColor(HEART_EMPTY);
-        for (int i = 0; i < hearts; i++) batch.draw(heartFull, left + i * (size + gap), y, size, size);
-        batch.setColor(Color.WHITE);
-        for (int i = 0; i < hearts; i++) {
-            float covered = health - i * 2f;
-            float x = left + i * (size + gap);
-            if (covered >= 2f) batch.draw(heartFull, x, y, size, size);
-            else if (covered >= 1f) batch.draw(heartHalf, x, y, size * 0.5f, size);
-        }
     }
 
     private void renderModal(float w, float h, float mx, float my) {
@@ -380,13 +433,6 @@ public final class PlayerUI implements InputProcessor, Disposable {
             // Portrait box to the right of the armour column.
             fill(px + 24f + SLOT + 12f, py + ph - 58f - 3 * (SLOT + PAD), SLOT * 2.3f, SLOT * 3 + 2 * PAD, PORTRAIT_BG);
         }
-        if (mode == Mode.CREATIVE) {
-            float[] tr = tabRects();
-            for (int i = 0; i < TAB_LABELS.length; i++) {
-                drawSlot(tr[i * 4], tr[i * 4 + 1], tr[i * 4 + 2], false);
-                if (i == creativeTab) drawSelected(tr[i * 4], tr[i * 4 + 1], tr[i * 4 + 2]);
-            }
-        }
         for (Slot s : slots) {
             drawSlot(s.x, s.y, s.size, s.hit(mx, my));
             if (s.store == STORE_INV && s.index == Inventory.HOTBAR_BASE + selectedHotbar) drawSelected(s.x, s.y, s.size);
@@ -394,23 +440,20 @@ public final class PlayerUI implements InputProcessor, Disposable {
         shapes.end();
 
         batch.begin();
-        font.setColor(TEXT);
+        font.setColor(BedrockWidgets.TEXT_DARK); // dark text on the light Bedrock panel
         title(P);
-        if (mode == Mode.CREATIVE) {
-            for (int i = 0; i < TAB_LABELS.length; i++) {
-                float[] tr = tabRects();
-                layout.setText(font, TAB_LABELS[i]);
-                font.draw(batch, layout, tr[i * 4] + (tr[i * 4 + 2] - layout.width) * 0.5f,
-                    tr[i * 4 + 1] + (SLOT + layout.height) * 0.5f);
-            }
-        }
         for (Slot s : slots) {
-            ItemStack st = s.store == STORE_CREATIVE ? new ItemStack(tabItems()[s.index], 1) : read(s);
+            ItemStack st = s.store == STORE_CREATIVE ? new ItemStack(CREATIVE_ITEMS[s.index], 1) : read(s);
             drawStack(st, s.x, s.y, s.size);
             if (st == null && isArmorSlot(s)) armorHint(s);
         }
         if (carried != null) drawStack(carried, mx - SLOT * 0.5f, my - SLOT * 0.5f, SLOT);
         batch.end();
+
+        // Rotating 3D player model (reflecting worn armour) inside the inventory's portrait box.
+        if (mode == Mode.INVENTORY) {
+            renderPreviewModel(px + 24f + SLOT + 12f, py + ph - 58f - 3 * (SLOT + PAD), SLOT * 2.3f, SLOT * 3 + 2 * PAD);
+        }
     }
 
     private void title(float[] P) {
@@ -426,20 +469,12 @@ public final class PlayerUI implements InputProcessor, Disposable {
     private void fill(float x, float y, float w, float h, Color c) { shapes.setColor(c); shapes.rect(x, y, w, h); }
 
     private void drawPanel(float x, float y, float w, float h) {
-        fill(x, y, w, h, PANEL_BG);
-        fill(x, y, w, BORDER, PANEL_BORDER);
-        fill(x, y + h - BORDER, w, BORDER, PANEL_BORDER);
-        fill(x, y, BORDER, h, PANEL_BORDER);
-        fill(x + w - BORDER, y, BORDER, h, PANEL_BORDER);
+        BedrockWidgets.panel(shapes, x, y, w, h);
     }
 
-    /** A beveled Bedrock slot: dark top/left, light bottom/right (inset look). */
+    /** A beveled Bedrock slot: recessed top/left, light bottom/right (inset look). */
     private void drawSlot(float x, float y, float s, boolean hovered) {
-        fill(x, y, s, s, hovered ? SLOT_HOVER : SLOT_BG);
-        fill(x, y, s, BEVEL, BEVEL_LIGHT);          // bottom (light)
-        fill(x + s - BEVEL, y, BEVEL, s, BEVEL_LIGHT); // right (light)
-        fill(x, y + s - BEVEL, s, BEVEL, BEVEL_DARK);  // top (dark)
-        fill(x, y, BEVEL, s, BEVEL_DARK);              // left (dark)
+        BedrockWidgets.slot(shapes, x, y, s, hovered);
     }
 
     private void drawSelected(float x, float y, float s) {
@@ -475,6 +510,8 @@ public final class PlayerUI implements InputProcessor, Disposable {
         shapes.dispose();
         font.dispose();
         icons.dispose();
-        heartTex.dispose();
+        if (previewBatch != null) previewBatch.dispose();
+        if (previewModel != null) previewModel.dispose();
+        if (previewArmor != null) previewArmor.dispose();
     }
 }

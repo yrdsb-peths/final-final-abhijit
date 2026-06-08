@@ -39,6 +39,12 @@ public final class CameraRig {
     private final Vector3 lookTmp = new Vector3();
     private boolean initialised = false;
 
+    // Match-intro pan: ease the camera from a far corner (looking at the map centre) into the normal
+    // follow pose over a duration, then hand off to the live follow.
+    private final Vector3 introFrom = new Vector3();
+    private final Vector3 introLookFrom = new Vector3();
+    private float introT = -1f, introDur = 0f;
+
     public CameraRig() {
         camera = new PerspectiveCamera(FOV_BASE, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
         camera.near = 0.1f;
@@ -55,6 +61,18 @@ public final class CameraRig {
     public void setBottomBoundary(float worldMaxZ) {
         this.bottomZ = worldMaxZ;
     }
+
+    /** Start a cinematic pan: camera begins at {@code fromPos} looking at {@code lookFrom}, then eases
+     *  into the normal follow pose over {@code duration} seconds. */
+    public void beginIntro(Vector3 fromPos, Vector3 lookFrom, float duration) {
+        introFrom.set(fromPos);
+        introLookFrom.set(lookFrom);
+        introDur = duration;
+        introT = 0f;
+        initialised = true; // we drive the position ourselves during the intro
+    }
+
+    public boolean isIntroActive() { return introT >= 0f && introT < introDur; }
 
     public void update(float delta, Vector3 playerPos, boolean sprinting) {
         lookTmp.set(playerPos.x, playerPos.y + LOOK_HEIGHT, playerPos.z);
@@ -74,7 +92,14 @@ public final class CameraRig {
         desiredPos.y += OFFSET.y + zoneT * ELEV_EXTRA_Y;
         desiredPos.z += OFFSET.z - zoneT * ELEV_PULL_Z;
 
-        if (!initialised) {
+        if (introT >= 0f && introT < introDur) {
+            // Cinematic pan: ease from the far corner into the follow pose (slow → fast → settle).
+            float t = introT / introDur;
+            float e = t * t * (3f - 2f * t); // smoothstep
+            camera.position.set(introFrom).lerp(desiredPos, e);
+            target.set(introLookFrom).lerp(lookTmp, e);
+            introT += delta;
+        } else if (!initialised) {
             target.set(lookTmp);
             camera.position.set(desiredPos);
             initialised = true;

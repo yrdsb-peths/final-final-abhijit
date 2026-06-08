@@ -11,9 +11,13 @@ import com.badlogic.gdx.graphics.g3d.Material;
 import com.badlogic.gdx.graphics.g3d.Model;
 import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
+import com.badlogic.gdx.graphics.g3d.attributes.BlendingAttribute;
+import com.badlogic.gdx.graphics.g3d.attributes.FloatAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.IntAttribute;
 import com.badlogic.gdx.graphics.g3d.attributes.TextureAttribute;
 import com.badlogic.gdx.graphics.g3d.model.Node;
+import com.badlogic.gdx.graphics.g3d.utils.MeshPartBuilder;
+import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Matrix4;
 import com.badlogic.gdx.math.Quaternion;
@@ -46,7 +50,7 @@ import com.brawlgame.model.WeaponModels;
  */
 public final class WeaponController implements Disposable {
 
-    public enum Weapon { FIST, SWORD, GUN }
+    public enum Weapon { FIST, SWORD, GUN, ITEM }
 
     private static final float D2R = MathUtils.degreesToRadians;
 
@@ -94,7 +98,8 @@ public final class WeaponController implements Disposable {
     private static final float GUN_BLEND_TIME = 0.15f; // tactical-frame transition
 
     // ---- gun firing (potato projectiles) ----
-    private static final float GUN_DMG = 45f, GUN_SPEED = 22f, GUN_RANGE = 14f, GUN_COOLDOWN = 0.28f;
+    // Potato hits hard but is NOT a one-shot — several are needed to drop the armoured rival.
+    private static final float GUN_DMG = 16f, GUN_SPEED = 22f, GUN_RANGE = 14f, GUN_COOLDOWN = 0.28f;
     private static final float GUN_MUZZLE_OFFSET = 0.6f; // forward spawn offset from the player
     private static final float GUN_FIRE_Y = 1.3f;        // chest height the potato leaves from
 
@@ -123,6 +128,14 @@ public final class WeaponController implements Disposable {
     private final WeaponModels.GunAsset gunAsset;
     private final ModelInstance gun;
 
+    // A flat, double-sided quad for holding a generic item (e.g. armour pieces) in the fist — its
+    // diffuse texture is swapped to the held item's icon each frame.
+    private final Model itemQuadModel;
+    private final ModelInstance itemQuad;
+    private final TextureAttribute itemQuadTex;
+    private ItemType heldItem;
+    private java.util.function.Function<ItemType, Texture> iconResolver;
+
     private final SwooshTrail trail = new SwooshTrail();
     // Hit hearts are spawned by the struck entity (CombatDummy), so they appear ON the entity.
 
@@ -131,6 +144,12 @@ public final class WeaponController implements Disposable {
 
     private boolean attacking;
     private float attackT;
+
+    // ---- Brawl-Stars ammo: attacks are gated on having a loaded segment; they refill over time ----
+    private int ammo;            // currently loaded segments
+    private int ammoCapacity;    // = reloadSegments() for the active weapon
+    private float ammoRefillTimer;
+    private boolean dryFire;      // one-shot: clicked while empty (drives the HUD red flash + shake)
     private boolean altHand;   // alternates: sword combo direction / which fist punches
     private boolean struck;
 
@@ -186,6 +205,24 @@ public final class WeaponController implements Disposable {
         for (int i = 0; i < MAX_POTATO; i++) {
             potatoes[i] = new PotatoProjectile(new ModelInstance(potatoModel));
         }
+
+        // Held generic-item quad (icon swapped per frame; potatoTex is just a placeholder).
+        Material itemMat = new Material(
+            TextureAttribute.createDiffuse(potatoTex),
+            new BlendingAttribute(com.badlogic.gdx.graphics.GL20.GL_SRC_ALPHA,
+                com.badlogic.gdx.graphics.GL20.GL_ONE_MINUS_SRC_ALPHA),
+            FloatAttribute.createAlphaTest(0.5f),
+            IntAttribute.createCullFace(com.badlogic.gdx.graphics.GL20.GL_NONE));
+        ModelBuilder mb = new ModelBuilder();
+        mb.begin();
+        MeshPartBuilder b = mb.part("item", com.badlogic.gdx.graphics.GL20.GL_TRIANGLES,
+            Usage.Position | Usage.Normal | Usage.TextureCoordinates, itemMat);
+        b.setUVRange(0f, 0f, 1f, 1f);
+        float s = 0.5f;
+        b.rect(-s, -s, 0f,  s, -s, 0f,  s, s, 0f,  -s, s, 0f,  0f, 0f, 1f);
+        itemQuadModel = mb.end();
+        itemQuad = new ModelInstance(itemQuadModel);
+        itemQuadTex = (TextureAttribute) itemQuad.materials.get(0).get(TextureAttribute.Diffuse);
     }
 
     /** The active weapon, set from the selected hotbar item by the screen (no hardcoded weapon keys). */
@@ -198,8 +235,14 @@ public final class WeaponController implements Disposable {
      * variant's model/texture to hold (wooden → iron → diamond, etc.). Null/non-weapon → fists.
      */
     public void setHeldItem(ItemType item) {
+        heldItem = item;
         current = weaponFor(item);
         if (item != null && item.isSword()) swordVariant = variantFor(item);
+    }
+
+    /** Supplies the icon texture for a held generic item (e.g. armour) so it can be shown in the fist. */
+    public void setIconResolver(java.util.function.Function<ItemType, Texture> resolver) {
+        this.iconResolver = resolver;
     }
 
     private static WeaponModels.SwordVariant variantFor(ItemType item) {
@@ -221,6 +264,7 @@ public final class WeaponController implements Disposable {
         if (item == null) return Weapon.FIST;
         if (item == ItemType.POTATO_GUN) return Weapon.GUN;
         if (item.isSword()) return Weapon.SWORD;
+        if (item.isArmor()) return Weapon.ITEM; // armour pieces are held in the fist, not swung
         return Weapon.FIST;
     }
 
@@ -229,12 +273,20 @@ public final class WeaponController implements Disposable {
         boolean click = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
         if (click && !prevClick) {
             if (current == Weapon.GUN) {
-                if (gunCooldown <= 0f) { pendingFire = true; gunCooldown = GUN_COOLDOWN; }
-            } else if (!attacking) {
-                attacking = true;
-                attackT = 0f;
-                struck = false;
-                altHand = !altHand;
+                if (gunCooldown <= 0f) {
+                    if (ammo >= 1) { pendingFire = true; gunCooldown = GUN_COOLDOWN; ammo--; }
+                    else dryFire = true; // out of ammo → can't fire, just signal the empty bar
+                }
+            } else if (current != Weapon.ITEM && !attacking) { // held items (armour) don't swing
+                if (ammo >= 1) {
+                    attacking = true;
+                    attackT = 0f;
+                    struck = false;
+                    altHand = !altHand;
+                    ammo--;        // consume a round; the swing (and its damage) only runs with ammo
+                } else {
+                    dryFire = true; // out of ammo → no swing at all
+                }
             }
         }
         prevClick = click;
@@ -243,6 +295,7 @@ public final class WeaponController implements Disposable {
     /** Advance attack/stance and fill the arm override for the animator. */
     public void updatePose(float delta, PlayerAnimator.ArmPose pose) {
         pose.reset();
+        tickAmmo(delta);
 
         if (gunCooldown > 0f) gunCooldown -= delta;
         if (pendingFire) { fireGun(); pendingFire = false; }
@@ -251,7 +304,7 @@ public final class WeaponController implements Disposable {
         gunBlend = MathUtils.lerp(gunBlend, gunTarget, Math.min(1f, delta / GUN_BLEND_TIME));
 
         if (gunBlend > 0.01f) applyGunStance(pose);
-        if (current == Weapon.SWORD && !attacking) applySwordReadyPose(pose);
+        if ((current == Weapon.SWORD || current == Weapon.ITEM) && !attacking) applySwordReadyPose(pose);
 
         if (attacking) {
             float dur = current == Weapon.FIST ? PUNCH_DUR : SWING_DUR;
@@ -373,6 +426,15 @@ public final class WeaponController implements Disposable {
                 .rotate(Vector3.Y, SWORD_TWIST)
                 .rotate(Vector3.Z, SWORD_ROLL);
             if (attacking) sampleSwordVfx();
+        } else if (current == Weapon.ITEM) {
+            // A flat held item (armour piece): anchored in the fist, the icon facing up-forward.
+            if (iconResolver != null && heldItem != null) {
+                itemQuadTex.textureDescription.texture = iconResolver.apply(heldItem);
+            }
+            anchor.set(player.transform).mul(weaponArm.globalTransform).translate(0f, -0.6f, 0f);
+            itemQuad.transform.set(anchor)
+                .rotate(Vector3.X, -55f)   // tilt the flat item back toward the camera
+                .scale(0.55f, 0.55f, 0.55f);
         } else if (attacking) { // FIST
             samplePunchVfx();
         }
@@ -521,6 +583,7 @@ public final class WeaponController implements Disposable {
     public void renderWorld(ModelBatch batch, Environment env) {
         if (current == Weapon.SWORD) batch.render(sword(), env);
         else if (current == Weapon.GUN) batch.render(gun, env);
+        else if (current == Weapon.ITEM) batch.render(itemQuad, env);
         for (PotatoProjectile p : potatoes) p.render(batch, env);
         impactFx.render(batch, env);
     }
@@ -531,6 +594,50 @@ public final class WeaponController implements Disposable {
     }
 
     public Weapon getWeapon() { return current; }
+
+    /** Loaded ammo segments + capacity, and a one-shot "clicked while empty" edge — feed the overhead bar. */
+    public int ammo() { return ammo; }
+    public int ammoCapacity() { return ammoCapacity; }
+    public boolean pollDryFire() { boolean b = dryFire; dryFire = false; return b; }
+
+    /** Refill ammo over time; switching weapons reloads to full. */
+    private void tickAmmo(float delta) {
+        int cap = reloadSegments();
+        if (cap != ammoCapacity) { ammoCapacity = cap; ammo = cap; ammoRefillTimer = 0f; } // weapon changed → full
+        if (ammo < ammoCapacity) {
+            ammoRefillTimer += delta;
+            float per = reloadSecondsPerSegment();
+            while (ammoRefillTimer >= per && ammo < ammoCapacity) { ammo++; ammoRefillTimer -= per; }
+        }
+    }
+
+    /** Number of segments on the overhead reload bar: wood/gold 2, stone/iron 3, diamond 4 (gun 3, fist 2). */
+    public int reloadSegments() {
+        if (current == Weapon.GUN) return 3;
+        if (current == Weapon.FIST) return 2;
+        switch (swordVariant) {
+            case STONE:
+            case IRON:    return 3;
+            case DIAMOND: return 4;
+            case WOOD:
+            case GOLD:
+            default:      return 2;
+        }
+    }
+
+    /** Seconds to refill one reload segment — diamond reloads fastest, wood/gold slowest. */
+    public float reloadSecondsPerSegment() {
+        if (current == Weapon.GUN) return 2.4f;
+        if (current == Weapon.FIST) return 1.8f;
+        switch (swordVariant) {
+            case DIAMOND: return 2.0f;
+            case IRON:    return 2.8f;
+            case STONE:   return 3.2f;
+            case WOOD:
+            case GOLD:
+            default:      return 3.8f;
+        }
+    }
 
     // ---- aim-cone shape for the ground reticle (DungeonGame reads these) ----
     private static final float CONE_SWORD_HALF = 68f, CONE_SWORD_RANGE = 3.6f;
@@ -562,6 +669,7 @@ public final class WeaponController implements Disposable {
     public void dispose() {
         for (WeaponModels.SwordAsset a : swordAssets.values()) a.dispose();
         gunAsset.dispose();
+        itemQuadModel.dispose();
         potatoModel.dispose();
         potatoTex.dispose();
         impactFx.dispose();

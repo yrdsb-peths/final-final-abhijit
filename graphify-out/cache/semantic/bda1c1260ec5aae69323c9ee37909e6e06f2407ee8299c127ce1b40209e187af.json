@@ -1,0 +1,1 @@
+{"nodes": [{"id": "map_mapsize_mapsize", "label": "MapSize", "file_type": "code", "source_file": "core/src/main/java/com/brawlgame/map/MapSize.java", "source_location": "enum MapSize", "source_url": null, "captured_at": null, "author": null, "contributor": null}], "edges": [], "hyperedges": []}
