@@ -16,6 +16,7 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
 import com.brawlgame.map.GameMap;
 import com.brawlgame.map.MapSerializer;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.net.GameServer;
 import com.brawlgame.net.LanDiscovery;
 import com.brawlgame.net.LanDiscovery.ServerInfo;
@@ -125,9 +126,9 @@ public final class MultiplayerScreen implements Screen {
         bt.end();
 
         if (Gdx.input.justTouched()) {
-            if (chov) startCreate();
-            if (jhov) startJoin();
-            if (bhov) goBack();
+            if (chov) { AudioManager.get().click(); startCreate(); }
+            if (jhov) { AudioManager.get().click(); startJoin(); }
+            if (bhov) { AudioManager.get().click(); goBack(); }
         }
     }
 
@@ -178,7 +179,7 @@ public final class MultiplayerScreen implements Screen {
         if (server != null && server.isClientConnected()) {
             launchGameAsHost();
         }
-        if (Gdx.input.justTouched() && cancHov) { server.close(); server = null; panel = Panel.HOME; }
+        if (Gdx.input.justTouched() && cancHov) { AudioManager.get().click(); server.close(); server = null; panel = Panel.HOME; }
     }
 
     private void launchGameAsHost() {
@@ -257,13 +258,14 @@ public final class MultiplayerScreen implements Screen {
         bt.end();
 
         if (Gdx.input.justTouched()) {
-            if (cancHov) { discovery.stopScan(); panel = Panel.HOME; }
+            if (cancHov) { AudioManager.get().click(); discovery.stopScan(); panel = Panel.HOME; }
             if (servers != null) {
                 float topY = H * 0.70f;
                 for (int i = 0; i < servers.size(); i++) {
                     float ry = topY - i * (ROW_H + ROW_GAP);
                     if (m.x >= cx - ROW_W*0.5f && m.x <= cx + ROW_W*0.5f
                      && m.y >= ry && m.y <= ry + ROW_H) {
+                        AudioManager.get().click();
                         connectToServer(servers.get(i));
                     }
                 }

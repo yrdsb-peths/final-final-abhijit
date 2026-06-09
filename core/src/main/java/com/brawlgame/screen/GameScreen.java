@@ -21,6 +21,7 @@ import com.badlogic.gdx.graphics.g3d.utils.DepthShaderProvider;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
 import com.brawlgame.entity.AiBrawler;
@@ -151,6 +152,7 @@ public final class GameScreen implements Screen {
 
     @Override
     public void show() {
+        AudioManager.get().stopMenuMusic();
         modelBatch = new ModelBatch();
         environment = new Environment();
         environment.set(new ColorAttribute(ColorAttribute.AmbientLight, 0.55f, 0.55f, 0.58f, 1f));
@@ -224,6 +226,7 @@ public final class GameScreen implements Screen {
 
         bot = new AiBrawler(botSkin, botStartX, botStartZ, bMinX, bMaxX, bMinZ, bMaxZ);
         if (difficultyScale != 1f) bot.setDifficultyScale(difficultyScale);
+        bot.setHazardChecker((x, z) -> gas != null && gas.isActive() && gas.inGas(x, z));
         player.getWeapon().setTarget(bot);
         player.setMatchElimination(true);
         player.setMatchStats(playerStats);
@@ -364,7 +367,7 @@ public final class GameScreen implements Screen {
                 if (networkRole == NetworkRole.HOST) {
                     bot.updateRemote(d, remoteInput.forward, remoteInput.backward, remoteInput.left,
                         remoteInput.right, remoteInput.jump, remoteInput.sprint, remoteInput.attack,
-                        remoteInput.aimDeg, player);
+                        remoteInput.gun, remoteInput.aimDeg, player);
                 } else {
                     bot.update(d, player);
                 }
@@ -403,12 +406,13 @@ public final class GameScreen implements Screen {
         boolean left = Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT));
         boolean right = Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT));
         boolean jump = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
-        boolean sprint = Gdx.input.isKeyPressed(Input.Keys.CONTROL_LEFT)
-            || Gdx.input.isKeyPressed(Input.Keys.CONTROL_RIGHT);
+        boolean sprint = jump && (forward || backward || left || right);
         boolean attack = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
+        boolean gun = ui != null && ui.selectedItem() == ItemType.POTATO_GUN;
         float aimDeg = aimDegFromMouse(bot != null ? bot.position() : player.getPosition());
-        netClient.sendInput(String.format(Locale.US, "INPUT %d %d %d %d %d %d %d %.2f",
-            bit(forward), bit(backward), bit(left), bit(right), bit(jump), bit(sprint), bit(attack), aimDeg));
+        netClient.sendInput(String.format(Locale.US, "INPUT %d %d %d %d %d %d %d %d %.2f",
+            bit(forward), bit(backward), bit(left), bit(right), bit(jump), bit(sprint),
+            bit(attack), bit(gun), aimDeg));
     }
 
     private void pollClientState() {
@@ -423,9 +427,11 @@ public final class GameScreen implements Screen {
         Vector3 p = player.getPosition();
         Vector3 b = bot.position();
         netServer.sendState(String.format(Locale.US,
-            "STATE %.3f %.3f %.3f %.3f %.2f %d %.3f %.3f %.3f %.3f %.2f %d",
+            "STATE %.3f %.3f %.3f %.3f %.2f %d %.3f %.3f %.3f %.3f %.2f %d %d %d %d %d %d %d %d",
             p.x, p.y, p.z, player.getHealth(), player.getFacingDeg(), bit(player.isEliminated()),
-            b.x, b.y, b.z, bot.health(), bot.facingDeg(), bit(bot.isDead() || bot.isDying())));
+            b.x, b.y, b.z, bot.health(), bot.facingDeg(), bit(bot.isDead() || bot.isDying()),
+            bit(bot.isMoving()), bit(remoteInput.sprint), bit(bot.isAttacking()), bit(bot.isGunEquipped()),
+            bit(player.isMoving()), bit(player.isSprinting()), bit(ui != null && ui.selectedItem() == ItemType.POTATO_GUN)));
     }
 
     private void applyServerState(String line) {
@@ -444,8 +450,15 @@ public final class GameScreen implements Screen {
             float bh = Float.parseFloat(parts[10]);
             float bf = Float.parseFloat(parts[11]);
             boolean be = "1".equals(parts[12]);
-            player.setNetworkSnapshot(px, py, pz, ph, pf, pe);
-            bot.setNetworkSnapshot(bx, by, bz, bh, bf, be);
+            boolean bm = parts.length > 13 && "1".equals(parts[13]);
+            boolean bs = parts.length > 14 && "1".equals(parts[14]);
+            boolean ba = parts.length > 15 && "1".equals(parts[15]);
+            boolean bg = parts.length > 16 && "1".equals(parts[16]);
+            boolean pm = parts.length > 17 && "1".equals(parts[17]);
+            boolean ps = parts.length > 18 && "1".equals(parts[18]);
+            boolean pg = parts.length > 19 && "1".equals(parts[19]);
+            player.setNetworkSnapshot(px, py, pz, ph, pf, pe, pm, ps, pg);
+            bot.setNetworkSnapshot(bx, by, bz, bh, bf, be, bm, bs, ba, bg);
             if ((pe || be) && brawlersLeft > 1) brawlersLeft = 1;
         } catch (NumberFormatException ignored) {
         }
@@ -479,7 +492,7 @@ public final class GameScreen implements Screen {
     private static int bit(boolean b) { return b ? 1 : 0; }
 
     private static final class RemoteInput {
-        boolean forward, backward, left, right, jump, sprint, attack;
+        boolean forward, backward, left, right, jump, sprint, attack, gun;
         float aimDeg = Float.NaN;
 
         void parse(String line) {
@@ -492,7 +505,9 @@ public final class GameScreen implements Screen {
             jump = "1".equals(p[5]);
             sprint = "1".equals(p[6]);
             attack = "1".equals(p[7]);
-            try { aimDeg = Float.parseFloat(p[8]); }
+            gun = p.length >= 10 && "1".equals(p[8]);
+            int aimIndex = p.length >= 10 ? 9 : 8;
+            try { aimDeg = Float.parseFloat(p[aimIndex]); }
             catch (NumberFormatException e) { aimDeg = Float.NaN; }
         }
     }
@@ -558,13 +573,13 @@ public final class GameScreen implements Screen {
         if (showDebug) debug.render(cameraRig.camera, player);
 
         if (!player.isEliminated()) {
-            platePos.set(player.getPosition().x, player.getPosition().y + 5.5f, player.getPosition().z);
+            platePos.set(player.getPosition().x, player.getPosition().y + 2.45f, player.getPosition().z);
             overhead.render(cameraRig.camera, platePos,
                 networkRole == NetworkRole.CLIENT ? "Host" : com.brawlgame.game.PlayerProfile.get().playerName,
                 player.getHealth(), player.getMaxHealth());
         }
         if (!bot.isDead() && !bot.isDying()) {
-            botPlatePos.set(bot.position().x, bot.position().y + 5.5f, bot.position().z);
+            botPlatePos.set(bot.position().x, bot.position().y + 2.45f, bot.position().z);
             overhead.renderSimple(cameraRig.camera, botPlatePos,
                 networkRole == NetworkRole.CLIENT ? "You" : (networkRole == NetworkRole.HOST ? "Guest" : "Rival"),
                 bot.health(), bot.maxHealth());

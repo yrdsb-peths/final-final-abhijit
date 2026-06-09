@@ -16,7 +16,7 @@ import java.net.Socket;
  * <p>State / input lines use a simple text protocol:
  * <pre>
  *   STATE &lt;px&gt; &lt;py&gt; &lt;pz&gt; &lt;ph&gt; &lt;pf&gt; &lt;pe&gt; &lt;rx&gt; &lt;ry&gt; &lt;rz&gt; &lt;rh&gt; &lt;rf&gt; &lt;re&gt;
- *   INPUT &lt;forward&gt; &lt;back&gt; &lt;left&gt; &lt;right&gt; &lt;jump&gt; &lt;sprint&gt; &lt;attack&gt; &lt;aimDeg&gt;
+ *   INPUT &lt;forward&gt; &lt;back&gt; &lt;left&gt; &lt;right&gt; &lt;jump&gt; &lt;sprint&gt; &lt;attack&gt; &lt;gun&gt; &lt;aimDeg&gt;
  * </pre>
  */
 public final class GameServer {

@@ -10,6 +10,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.ui.OptionsPanel;
 import com.brawlgame.ui.UiViewport;
 
@@ -67,7 +68,7 @@ public final class OptionsMenuScreen implements Screen {
         Gdx.gl.glDisable(GL20.GL_BLEND);
 
         if (Gdx.input.justTouched()) {
-            if (op.click(m.x, m.y)) game.setScreen(new MainMenuScreen(game));
+            if (op.click(m.x, m.y)) { AudioManager.get().click(); game.setScreen(new MainMenuScreen(game)); }
         }
         if (Gdx.input.isTouched())  op.drag(m.x);
         if (!Gdx.input.isTouched()) op.release();

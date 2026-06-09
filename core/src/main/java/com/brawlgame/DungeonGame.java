@@ -2,6 +2,7 @@ package com.brawlgame;
 
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.screen.MainMenuScreen;
 import com.brawlgame.screen.TutorialScreen;
@@ -31,5 +32,6 @@ public class DungeonGame extends Game {
     @Override
     public void dispose() {
         if (getScreen() != null) getScreen().dispose();
+        AudioManager.disposeGlobal();
     }
 }

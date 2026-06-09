@@ -26,6 +26,7 @@ import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
 import com.brawlgame.gfx.BlockParticles;
 import com.brawlgame.gfx.SwooshTrail;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.item.ItemType;
 import com.brawlgame.model.MinecraftPlayerModel;
 import com.brawlgame.model.PlayerAnimator;
@@ -278,11 +279,12 @@ public final class WeaponController implements Disposable {
         if (click && !prevClick && swapCooldown <= 0f) { // swap recovery blocks attacks
             if (current == Weapon.GUN) {
                 if (gunCooldown <= 0f) {
-                    if (ammo >= 1) { pendingFire = true; gunCooldown = GUN_COOLDOWN; ammo--; }
+                    if (ammo >= 1) { pendingFire = true; gunCooldown = GUN_COOLDOWN; ammo--; AudioManager.get().shoot(); }
                     else dryFire = true;
                 }
             } else if (current != Weapon.ITEM && !attacking) {
                 if (ammo >= 1) {
+                    AudioManager.get().swing();
                     attacking = true;
                     attackT = 0f;
                     struck = false;

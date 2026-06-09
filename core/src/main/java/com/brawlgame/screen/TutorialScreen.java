@@ -13,6 +13,7 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
 import com.brawlgame.game.PlayerProfile;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.ui.BedrockWidgets;
 import com.brawlgame.ui.UiViewport;
 
@@ -175,6 +176,7 @@ public final class TutorialScreen implements Screen {
         // input
         if ((Gdx.input.justTouched() && hov) || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)
                 || Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
+            AudioManager.get().click();
             advance();
         }
     }

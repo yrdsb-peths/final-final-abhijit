@@ -33,6 +33,7 @@ public final class OverheadHud implements Disposable {
 
     private static final float FLASH_TIME = 0.2f;
     private static final float SHAKE_TIME = 0.18f;
+    private static final float HEAD_CLEARANCE = 42f;
 
     private final UiViewport uiv = new UiViewport();
     private final ShapeRenderer shapes = new ShapeRenderer();
@@ -93,7 +94,7 @@ public final class OverheadHud implements Disposable {
         if (!project(cam, chestWorld)) return;
         beginHud();
 
-        float cx = vc.x, top = vc.y + 20f;
+        float cx = vc.x, top = vc.y + HEAD_CLEARANCE;
         float barX = cx - BAR_W * 0.5f;
         float hpBarY = top - 38f, segY = top - 54f;
 
@@ -125,7 +126,7 @@ public final class OverheadHud implements Disposable {
         if (!project(cam, chestWorld)) return;
         beginHud();
 
-        float cx = vc.x, top = vc.y + 20f;
+        float cx = vc.x, top = vc.y + HEAD_CLEARANCE;
         float barX = cx - BAR_W * 0.5f, hpBarY = top - 36f;
 
         shapes.begin(ShapeType.Filled);

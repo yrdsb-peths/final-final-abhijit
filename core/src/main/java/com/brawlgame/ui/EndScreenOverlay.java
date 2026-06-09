@@ -13,6 +13,7 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Disposable;
 import com.brawlgame.game.MatchManager;
 import com.brawlgame.game.MatchStats;
+import com.brawlgame.audio.AudioManager;
 
 /**
  * Brawl-Stars-style 1v1 end screen with 3D character portraits, match stats, and PROCEED.
@@ -47,6 +48,7 @@ public final class EndScreenOverlay implements Disposable {
         this.onProceed = onProceed;
         this.anim = 0f;
         this.defeatFade = 0f;
+        AudioManager.get().gameOver();
     }
 
     public boolean isVisible() { return outcome != MatchManager.Outcome.NONE; }

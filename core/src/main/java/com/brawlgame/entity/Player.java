@@ -17,6 +17,7 @@ import com.badlogic.gdx.math.collision.Ray;
 import java.util.function.Supplier;
 
 import com.badlogic.gdx.utils.Disposable;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.combat.ArmorStats;
 import com.brawlgame.combat.BlockCollider;
 import com.brawlgame.combat.WeaponController;
@@ -34,10 +35,10 @@ import com.brawlgame.model.PlayerAnimator;
  *
  * <p>Per-tick physics reproduces vanilla: horizontal friction 0.91*0.6 on the ground (0.91 in air),
  * acceleration tuned to the documented top speeds (walk 4.317 / sprint 5.612 / sneak 1.295 b/s),
- * gravity 0.08 with 0.98 drag, jump impulse 0.42 (≈1.252-block jump), and a 0.2 forward sprint-jump
+ * gravity 0.08 with 0.98 drag, jump impulse 0.42, and a forward jump-sprint
  * boost. Render position is interpolated between ticks so motion stays smooth at any frame rate.
  *
- * <p>Controls (MC-authentic): WASD move · Left Shift sneak · Left Ctrl or double-tap W sprint · Space jump.
+ * <p>Controls: WASD move · Left Shift sneak · hold Jump while moving to sprint-jump.
  */
 public final class Player implements Disposable {
 
@@ -52,7 +53,7 @@ public final class Player implements Disposable {
     private static final float GRAVITY = 0.08f;
     private static final float DRAG_Y = 0.98f;
     private static final float JUMP_V = 0.42f;
-    private static final float SPRINT_JUMP = 0.2f; // forward boost on sprint-jump — noticeably clears more ground
+    private static final float SPRINT_JUMP = 0.42f; // jump key is the sprint impulse in this game
     private static final int MAX_TICKS_PER_FRAME = 5;
 
     private static final float TURN_RATE = 16f;
@@ -82,6 +83,8 @@ public final class Player implements Disposable {
     private float tickAcc = 0f;
 
     private boolean jumpHeld = false;
+    private boolean jumpQueued = false;
+    private boolean sprintJumpedThisTick = false;
 
     private final Vector3 wish = new Vector3(); // normalised world move direction this frame
 
@@ -147,6 +150,7 @@ public final class Player implements Disposable {
         float dmg = inventory != null ? ArmorStats.reduce(raw, inventory) : raw;
         if (dmg <= 0f) return;
         health = Math.max(0f, health - dmg);
+        AudioManager.get().hurt();
         regenCooldown = REGEN_DELAY;
         hurtTimer = HURT_DUR;   // drives the screen-edge vignette + full-screen flash
         flashTimer = FLASH_DUR; // pure-red sprite tint ("heart shine")
@@ -207,6 +211,12 @@ public final class Player implements Disposable {
 
     /** Apply an authoritative network snapshot for non-local rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated) {
+        setNetworkSnapshot(x, y, z, health, facingDeg, eliminated, false, false, false);
+    }
+
+    /** Apply an authoritative network snapshot with animation/equipment state for remote rendering. */
+    public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated,
+                                   boolean moving, boolean sprinting, boolean gunHeld) {
         pos.set(x, y, z);
         prevPos.set(pos);
         renderPos.set(pos);
@@ -216,7 +226,16 @@ public final class Player implements Disposable {
         this.facingDeg = facingDeg;
         this.eliminated = eliminated || this.health <= 0f;
         onGround = y <= 0.001f;
+        this.sprinting = sprinting;
+        this.sneaking = false;
+        weapon.setHeldItem(gunHeld ? ItemType.POTATO_GUN : ItemType.DIAMOND_SWORD);
         applyTransform();
+        float speed = moving ? (sprinting ? 5.6f : 4.3f) : 0f;
+        weapon.setAim(renderPos.x, renderPos.z, facingDeg);
+        weapon.updatePose(1f / 60f, armPose);
+        animator.update(1f / 60f, speed, sprinting, false, onGround, armPose);
+        weapon.postAnimate();
+        weapon.updateVfx(1f / 60f);
     }
 
     /** F3 debug god mode: free flight (Jump = up, Sneak = down, no gravity) + invulnerability. */
@@ -265,6 +284,7 @@ public final class Player implements Disposable {
         applyTransform();
 
         float speed = (float) Math.sqrt(vx * vx + vz * vz) * 20f; // blocks/s
+        AudioManager.get().updateFootsteps(delta, speed > 0.35f, sprinting, onGround);
         weapon.setAim(renderPos.x, renderPos.z, facingDeg); // for melee arc/hit tests
         weapon.setCritReady(!onGround && vy < 0f);           // airborne + descending → next hit crits
         weapon.updatePose(delta, armPose);
@@ -295,16 +315,15 @@ public final class Player implements Disposable {
         boolean moving = wish.len2() > 0.0001f;
         if (moving) wish.nor();
 
+        if (Gdx.input.isKeyJustPressed(cfg.key(Settings.Action.JUMP))) jumpQueued = true;
+        jumpHeld = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+
         // Sneak on either shift key
         sneaking = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
             || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
 
-        // Sprint-jump: holding Space while moving forward engages sprint + jump boost
-        // The sprint-jump boost clears more ground, so you can clear gaps while advancing.
-        jumpHeld = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
-        float yawRad = facingDeg * MathUtils.degreesToRadians;
-        float forwardDot = wish.x * (-MathUtils.sin(yawRad)) + wish.z * (-MathUtils.cos(yawRad));
-        sprinting = moving && !sneaking && jumpHeld && forwardDot > 0.3f;
+        // Jump-to-sprint: holding jump while moving engages sprint; the actual jump gets the boost.
+        sprinting = moving && !sneaking && (jumpHeld || jumpQueued);
     }
 
     private void clampHorizontalSpeed(float maxPerTick) {
@@ -318,15 +337,17 @@ public final class Player implements Disposable {
 
     private void physicsTick() {
         if (godMode) { flyTick(); return; }
-        // Jump: fires whenever Space is held and we're grounded, so you can spam/hold to bunny-hop and chain sprint-jumps
-        if (jumpHeld && onGround) {
+        sprintJumpedThisTick = false;
+        if ((jumpQueued || jumpHeld) && onGround) {
             vy = JUMP_V;
             if (sprinting && wish.len2() > 0.0001f) {
                 vx += wish.x * SPRINT_JUMP;
                 vz += wish.z * SPRINT_JUMP;
+                sprintJumpedThisTick = true;
             }
             onGround = false;
         }
+        jumpQueued = false;
 
         // horizontal: decay carried velocity by friction, then accelerate toward input
         float fr = onGround ? GROUND_FRICTION : AIR_FRICTION;
@@ -337,7 +358,9 @@ public final class Player implements Disposable {
             : AIR_ACCEL * (sprinting ? SPRINT_MUL : 1f);
         vx += wish.x * accel;
         vz += wish.z * accel;
-        clampHorizontalSpeed(onGround && sprinting ? 0.13f : (onGround ? 0.20f : 0.17f));
+        if (!sprintJumpedThisTick) {
+            clampHorizontalSpeed(onGround && sprinting ? 0.33f : (sprinting ? 0.36f : (onGround ? 0.26f : 0.21f)));
+        }
 
         // Decay knockback independently — not affected by WASD, so hits feel weighty.
         knockVx *= KNOCK_FRICTION;
@@ -457,6 +480,7 @@ public final class Player implements Disposable {
     public Vector3 getPosition() { return renderPos; }
     public float getFacingDeg() { return facingDeg; }
     public boolean isSprinting() { return sprinting; }
+    public boolean isMoving() { return vx * vx + vz * vz > 0.0005f; }
     public boolean isSneaking() { return sneaking; }
     public boolean isOnGround() { return onGround; }
     public float getHitboxWidth() { return HITBOX_W; }

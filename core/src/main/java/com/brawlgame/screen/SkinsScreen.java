@@ -17,6 +17,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.ui.BedrockWidgets;
 import com.brawlgame.ui.CharacterShowcase;
@@ -191,13 +192,14 @@ public final class SkinsScreen implements Screen {
                 float tx = LIST_X, ty = LIST_TOP - i * (THUMB_SZ + THUMB_PAD);
                 if (m.x >= tx && m.x <= tx + THUMB_SZ * 3.5f + 8f && m.y >= ty && m.y <= ty + THUMB_SZ) {
                     selected = i;
+                    AudioManager.get().click();
                     rebuildShowcase();
                 }
             }
             boolean confHov2 = m.x >= confirmX && m.x <= confirmX + BTN_W && m.y >= confirmY && m.y <= confirmY + BTN_H;
             boolean backHov2 = m.x >= backX    && m.x <= backX    + BTN_W && m.y >= backY    && m.y <= backY    + BTN_H;
-            if (confHov2) { saveSkin(); game.setScreen(new MainMenuScreen(game)); }
-            if (backHov2) game.setScreen(new MainMenuScreen(game));
+            if (confHov2) { AudioManager.get().click(); saveSkin(); game.setScreen(new MainMenuScreen(game)); }
+            if (backHov2) { AudioManager.get().click(); game.setScreen(new MainMenuScreen(game)); }
         }
         if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) game.setScreen(new MainMenuScreen(game));
     }

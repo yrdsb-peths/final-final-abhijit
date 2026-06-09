@@ -3,6 +3,7 @@ package com.brawlgame.screen;
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
@@ -14,7 +15,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.Input.TextInputListener;
+import com.brawlgame.audio.AudioManager;
 import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.map.GameMap;
 import com.brawlgame.map.MapSerializer;
@@ -64,11 +65,38 @@ public final class MainMenuScreen implements Screen {
     private float spY, mpY, skY, opY, mmY, tmY;
     private static final float BTN_CX = 380f; // centre X of the button column
     private static final float NAME_H = 44f;  // height of the player-name field
+    private boolean editingName;
+    private final InputAdapter nameInput = new InputAdapter() {
+        @Override public boolean keyDown(int keycode) {
+            if (!editingName) return false;
+            if (keycode == Input.Keys.ENTER || keycode == Input.Keys.NUMPAD_ENTER || keycode == Input.Keys.ESCAPE) {
+                editingName = false;
+                if (PlayerProfile.get().playerName.trim().isEmpty()) PlayerProfile.get().playerName = "Player";
+                return true;
+            }
+            if (keycode == Input.Keys.BACKSPACE || keycode == Input.Keys.FORWARD_DEL) {
+                String name = PlayerProfile.get().playerName;
+                if (!name.isEmpty()) PlayerProfile.get().playerName = name.substring(0, name.length() - 1);
+                return true;
+            }
+            return false;
+        }
+
+        @Override public boolean keyTyped(char character) {
+            if (!editingName) return false;
+            if (character < 32 || character == 127) return true;
+            String name = PlayerProfile.get().playerName;
+            if (name.length() < 16) PlayerProfile.get().playerName = name + character;
+            return true;
+        }
+    };
 
     public MainMenuScreen(Game game) { this.game = game; }
 
     @Override
     public void show() {
+        AudioManager.get().playMenuMusic();
+        Gdx.input.setInputProcessor(nameInput);
         loadSkin();
         showcase = new CharacterShowcase();
         showcaseIdx = showcase.add(skinTex, null);
@@ -205,8 +233,9 @@ public final class MainMenuScreen implements Screen {
         fn.setColor(MUTED);
         fn.draw(bt, "Name:", bx + 10f, nameY + NAME_H * 0.5f + 7f);
         fn.getData().setScale(1.25f);
-        fn.setColor(nameHov ? Color.WHITE : new Color(0.88f, 0.88f, 0.92f, 1f));
+        fn.setColor((nameHov || editingName) ? Color.WHITE : new Color(0.88f, 0.88f, 0.92f, 1f));
         String pn = PlayerProfile.get().playerName;
+        if (editingName && ((int)(System.currentTimeMillis() / 400L) & 1) == 0) pn += "_";
         gl.setText(fn, pn);
         fn.draw(bt, pn, bx + BTN_W - gl.width - 10f, nameY + NAME_H * 0.5f + 8f);
 
@@ -225,23 +254,25 @@ public final class MainMenuScreen implements Screen {
         // ---- click handling ----
         if (Gdx.input.justTouched()) {
             if (nameHov) {
-                Gdx.input.getTextInput(new TextInputListener() {
-                    @Override public void input(String text) {
-                        String name = text.trim();
-                        if (!name.isEmpty()) {
-                            PlayerProfile.get().playerName = name;
-                        }
-                    }
-                    @Override public void canceled() {}
-                }, "Enter your player name", PlayerProfile.get().playerName, "");
-            } else if (spHov) launchSinglePlayer();
-            else if (mpHov) game.setScreen(new MultiplayerScreen(game));
-            else if (skHov) game.setScreen(new SkinsScreen(game));
-            else if (opHov) game.setScreen(new OptionsMenuScreen(game));
-            else if (mmHov) game.setScreen(new MapMakerMenuScreen(game));
-            else if (tmHov) game.setScreen(new TestPlayerScreen(game));
+                editingName = true;
+                if ("Player".equals(PlayerProfile.get().playerName)) PlayerProfile.get().playerName = "";
+            } else if (spHov) {
+                AudioManager.get().click();
+                editingName = false;
+                if (PlayerProfile.get().playerName.trim().isEmpty()) PlayerProfile.get().playerName = "Player";
+                launchSinglePlayer();
+            }
+            else {
+                editingName = false;
+                if (PlayerProfile.get().playerName.trim().isEmpty()) PlayerProfile.get().playerName = "Player";
+                if (mpHov) { AudioManager.get().click(); game.setScreen(new MultiplayerScreen(game)); }
+                else if (skHov) { AudioManager.get().click(); game.setScreen(new SkinsScreen(game)); }
+                else if (opHov) { AudioManager.get().click(); game.setScreen(new OptionsMenuScreen(game)); }
+                else if (mmHov) { AudioManager.get().click(); game.setScreen(new MapMakerMenuScreen(game)); }
+                else if (tmHov) { AudioManager.get().click(); game.setScreen(new TestPlayerScreen(game)); }
+            }
         }
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) Gdx.app.exit();
+        if (!editingName && Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) Gdx.app.exit();
     }
 
     private void launchSinglePlayer() {
@@ -252,6 +283,7 @@ public final class MainMenuScreen implements Screen {
             map = MapSerializer.load(f);
         } catch (Exception ignored) {}
         if (map == null) return;
+        AudioManager.get().stopMenuMusic();
         float diff = PlayerProfile.get().difficultyScale();
         game.setScreen(new GameScreen(game, map, diff));
     }
@@ -291,7 +323,10 @@ public final class MainMenuScreen implements Screen {
 
     @Override public void pause()  {}
     @Override public void resume() {}
-    @Override public void hide()   { dispose(); }
+    @Override public void hide()   {
+        if (Gdx.input.getInputProcessor() == nameInput) Gdx.input.setInputProcessor(null);
+        dispose();
+    }
 
     @Override
     public void dispose() {
