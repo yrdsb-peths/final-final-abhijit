@@ -86,8 +86,11 @@ public final class SoundManager implements Disposable {
     }
 
     private float volume() {
-        return Settings.get().masterVolume;
+        return com.badlogic.gdx.math.MathUtils.clamp(Settings.get().masterVolume, 0f, 1f);
     }
+
+    /** No-op for now as SoundManager only plays one-shots, but keeps API consistent with AudioManager. */
+    public void syncVolume() {}
 
     /** Play a random sword swing hit sound. */
     public void playSwordHit() {

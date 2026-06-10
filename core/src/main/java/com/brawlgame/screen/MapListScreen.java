@@ -91,6 +91,7 @@ public final class MapListScreen implements Screen {
             }
             for (int i = 0; i < rows.size(); i++) {
                 if (rows.get(i).contains(mx, my)) {
+                    com.brawlgame.audio.AudioManager.get().stopMenuMusic();
                     GameMap loaded = MapSerializer.load(maps.get(i));
                     game.setScreen(new GameScreen(game, loaded));
                     return;

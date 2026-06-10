@@ -93,13 +93,13 @@ public final class Player implements Disposable {
 
     // ---- health + armour-reduced damage ----
     private static final float MAX_HEALTH = 20f;     // 10 hearts, vanilla
-    private static final float REGEN_RATE = 1f;      // HP/sec recovered when not recently hit
-    private static final float REGEN_DELAY = 2.0f;   // seconds after a hit before regen resumes
+    private float regenRate = 0.35f;                 // HP/sec recovered when not recently hit (faster regen)
+    private float regenDelay = 4.0f;                 // seconds after a hit before regen resumes
     private static final float HURT_DUR = 0.45f;     // screen-vignette/full-flash duration on a hit
     private static final float FLASH_DUR = 0.2f;     // pure-red sprite tint duration ("heart shine")
     // Knockback impulse (per-tick blocks). A separate knockback vector is maintained so WASD input
     // cannot instantly cancel the impulse; it decays on its own at KNOCK_FRICTION per tick.
-    private static final float KB_H = 0.42f, KB_UP = 0.36f;
+    private static final float KB_H = 0.8f, KB_UP = 0.42f;
     private static final float KNOCK_FRICTION = 0.75f; // ~50% remaining after 2.4 ticks, gone after ~0.4 s
     private float health = MAX_HEALTH;
     private float regenCooldown = 0f;
@@ -113,6 +113,8 @@ public final class Player implements Disposable {
     private boolean matchElimination;
     private boolean eliminated;
     private MatchStats matchStats;
+    private float remoteSpeed = 0f;
+    private boolean remoteSprinting = false;
 
     public Player(Texture skin) {
         model = MinecraftPlayerModel.build(skin);
@@ -136,6 +138,28 @@ public final class Player implements Disposable {
         this.inventory = inventory;
     }
 
+    public void setRegenParams(float rate, float delay) {
+        this.regenRate = rate;
+        this.regenDelay = delay;
+    }
+
+    public void setDifficultyScale(float scale) {
+        if (scale <= 1.01f) { // Easy
+            this.regenRate = 0.35f;
+            this.regenDelay = 2.0f;
+        } else if (scale <= 1.51f) { // Medium
+            this.regenRate = 0.15f;
+            this.regenDelay = 4.0f;
+        } else { // Hard
+            this.regenRate = 0.08f;
+            this.regenDelay = 5.0f;
+        }
+    }
+
+    public Inventory getInventory() {
+        return inventory;
+    }
+
     /** Showdown mode: death is permanent (no respawn) for the 1v1 end screen. */
     public void setMatchElimination(boolean on) { this.matchElimination = on; }
     public boolean isEliminated() { return eliminated; }
@@ -151,7 +175,7 @@ public final class Player implements Disposable {
         if (dmg <= 0f) return;
         health = Math.max(0f, health - dmg);
         AudioManager.get().hurt();
-        regenCooldown = REGEN_DELAY;
+        regenCooldown = regenDelay;
         hurtTimer = HURT_DUR;   // drives the screen-edge vignette + full-screen flash
         flashTimer = FLASH_DUR; // pure-red sprite tint ("heart shine")
         tinted = false;         // force re-tint on the next frame
@@ -211,15 +235,17 @@ public final class Player implements Disposable {
 
     /** Apply an authoritative network snapshot for non-local rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated) {
-        setNetworkSnapshot(x, y, z, health, facingDeg, eliminated, false, false, false);
+        setNetworkSnapshot(x, y, z, health, facingDeg, eliminated, false, false, 0, false);
     }
 
     /** Apply an authoritative network snapshot with animation/equipment state for remote rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated,
-                                   boolean moving, boolean sprinting, boolean gunHeld) {
+                                   boolean moving, boolean sprinting, int heldType, boolean attacking) {
         pos.set(x, y, z);
-        prevPos.set(pos);
-        renderPos.set(pos);
+        if (renderPos.dst2(pos) > 16f) {
+            renderPos.set(pos);
+            prevPos.set(pos);
+        }
         vx = vy = vz = 0f;
         knockVx = knockVz = 0f;
         this.health = MathUtils.clamp(health, 0f, MAX_HEALTH);
@@ -228,14 +254,25 @@ public final class Player implements Disposable {
         onGround = y <= 0.001f;
         this.sprinting = sprinting;
         this.sneaking = false;
-        weapon.setHeldItem(gunHeld ? ItemType.POTATO_GUN : ItemType.DIAMOND_SWORD);
+        ItemType item = null;
+        if (heldType == 2) item = ItemType.POTATO_GUN;
+        else if (heldType == 1) item = ItemType.DIAMOND_SWORD;
+        weapon.setHeldItem(item);
+        weapon.setRemoteAttack(attacking);
         applyTransform();
-        float speed = moving ? (sprinting ? 5.6f : 4.3f) : 0f;
+        remoteSpeed = moving ? (sprinting ? 5.6f : 4.3f) : 0f;
+        remoteSprinting = sprinting;
         weapon.setAim(renderPos.x, renderPos.z, facingDeg);
-        weapon.updatePose(1f / 60f, armPose);
-        animator.update(1f / 60f, speed, sprinting, false, onGround, armPose);
+    }
+
+    /** Smoothly update animations and weapon VFX for remote player rendering on client. */
+    public void updateRemoteClient(float delta) {
+        renderPos.lerp(pos, Math.min(1f, delta * 20f));
+        weapon.setAim(renderPos.x, renderPos.z, facingDeg);
+        weapon.updatePose(delta, armPose);
+        animator.update(delta, remoteSpeed, remoteSprinting, false, onGround, armPose);
         weapon.postAnimate();
-        weapon.updateVfx(1f / 60f);
+        weapon.updateVfx(delta);
     }
 
     /** F3 debug god mode: free flight (Jump = up, Sneak = down, no gravity) + invulnerability. */
@@ -262,11 +299,25 @@ public final class Player implements Disposable {
     }
 
     public void update(float delta, Camera camera) {
-        readInput();
+        update(delta, camera, true);
+    }
+
+    public void update(float delta, Camera camera, boolean controllable) {
+        if (controllable) {
+            readInput();
+        } else {
+            wish.set(0f, 0f, 0f);
+            jumpQueued = false;
+            jumpHeld = false;
+            sprinting = false;
+            sneaking = false;
+        }
         // The active weapon (and the sword material/model) is pulled from the selected hotbar slot
         // every tick — iron sword → iron model, diamond → diamond, empty → fists. No hardcoded keys.
         if (heldItemSupplier != null) weapon.setHeldItem(heldItemSupplier.get());
-        weapon.handleInput();
+        if (controllable) {
+            weapon.handleInput();
+        }
 
         // fixed-step physics with leftover-time interpolation
         tickAcc += Math.min(delta, 0.25f);
@@ -280,7 +331,9 @@ public final class Player implements Disposable {
         float alpha = MathUtils.clamp(tickAcc / TICK, 0f, 1f);
         renderPos.set(prevPos).lerp(pos, alpha);
 
-        aimAtCursor(camera, delta);
+        if (controllable) {
+            aimAtCursor(camera, delta);
+        }
         applyTransform();
 
         float speed = (float) Math.sqrt(vx * vx + vz * vz) * 20f; // blocks/s
@@ -296,7 +349,7 @@ public final class Player implements Disposable {
         if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
         else if (health < MAX_HEALTH) {
             float before = health;
-            health = Math.min(MAX_HEALTH, health + REGEN_RATE * delta);
+            health = Math.min(MAX_HEALTH, health + regenRate * delta);
             if (matchStats != null) matchStats.addHealing(health - before);
         }
 

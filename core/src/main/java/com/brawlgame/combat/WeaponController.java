@@ -166,6 +166,7 @@ public final class WeaponController implements Disposable {
     private final Vector3 tip = new Vector3();
     private final Vector3 base = new Vector3();
     private boolean prevClick;
+    private boolean prevRemoteAttack;
 
     // aim / combat context (set by the Player each frame)
     private CombatTarget target;
@@ -248,6 +249,25 @@ public final class WeaponController implements Disposable {
     /** Supplies the icon texture for a held generic item (e.g. armour) so it can be shown in the fist. */
     public void setIconResolver(java.util.function.Function<ItemType, Texture> resolver) {
         this.iconResolver = resolver;
+    }
+
+    /** Apply an authoritative attack state from a network snapshot for remote rendering. */
+    public void setRemoteAttack(boolean remoteAttacking) {
+        if (remoteAttacking && !prevRemoteAttack) {
+            if (current == Weapon.GUN) {
+                pendingFire = true;
+                AudioManager.get().shoot();
+            } else if (current != Weapon.ITEM && !attacking) {
+                attacking = true;
+                attackT = 0f;
+                altHand = !altHand;
+            }
+        }
+        prevRemoteAttack = remoteAttacking;
+    }
+
+    public boolean isAttacking() {
+        return attacking;
     }
 
     private static WeaponModels.SwordVariant variantFor(ItemType item) {

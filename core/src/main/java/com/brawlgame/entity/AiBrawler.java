@@ -1,5 +1,7 @@
 package com.brawlgame.entity;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g3d.Environment;
@@ -31,6 +33,7 @@ import com.brawlgame.audio.AudioManager;
 import com.badlogic.gdx.graphics.g3d.model.Node;
 import com.badlogic.gdx.math.Matrix4;
 import java.util.function.BiPredicate;
+import com.brawlgame.ui.Settings;
 
 /**
  * The AI rival: a rigged Minecraft model that plays like a real opponent — it wears <b>iron armour</b>
@@ -52,8 +55,8 @@ import java.util.function.BiPredicate;
  */
 public final class AiBrawler implements CombatTarget, Disposable {
 
-    private enum State { WANDER, CHASE, ATTACK, FLEE, HEAL }
-    private enum Loadout { SWORD, GUN }
+    private enum State { WANDER, CHASE, ATTACK }
+    private enum Loadout { SWORD, GUN, FIST }
 
     private static final float HITBOX_HALF = 0.35f;
     private static final float HIT_RADIUS = 0.6f;
@@ -61,27 +64,25 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private static final float DEATH_DUR = 0.9f; // Minecraft death: tip onto side, red, then vanish
 
     private static final float AGGRO_RANGE = 12f;
-    private static final float MELEE_RANGE = 1.7f, MELEE_HIT_RANGE = 2.3f;
-    private static final float RUN_SPEED = 2.35f, WALK_SPEED = 1.2f, STRAFE_SPEED = 2.0f, STRAFE_RANGE = 3.6f;
-    private static final float CHASE_SPRINT_MUL = 1.18f;
-    private static final float FLEE_SPEED = 2.8f, FLEE_THRESHOLD = 0.30f; // flee at 30% HP
-    private static final float FLEE_DIST = 6f;    // run this far before healing
-    private static final float HEAL_AMOUNT = 4f, HEAL_DURATION = 3.0f;
+    private static final float MELEE_RANGE = 3.0f, MELEE_HIT_RANGE = 3.8f;
+    private static final float RUN_SPEED = 4.3f, WALK_SPEED = 2.4f, STRAFE_SPEED = 3.2f, STRAFE_RANGE = 3.6f;
+    private static final float CHASE_SPRINT_MUL = 1.32f;
     private static final float SPRINT_JUMP_DIST = 4.5f; // jump when closing from this range
     private static final float ACCEL = 14f;
 
     private static final float ATTACK_WINDUP = 0.42f;  // jump apex falls inside this → strike while descending
     private static final float ATTACK_LUNGE = 0.18f, ATTACK_COOLDOWN = 1.0f;
-    private static final float MELEE_DAMAGE = 5f, CRIT_MULT = 1.4f;
+    private static final float MELEE_DAMAGE = 12.5f, CRIT_MULT = 1.4f;
 
-    private static final float GRAVITY = 22f, JUMP_V = 7.2f;
+    private static final float GRAVITY = 22f, JUMP_V = 8.8f;
 
-    private static final float KB_SELF = 7.5f, KB_DAMP = 7f;        // knockback imparted TO this bot
-    private static final float KB_TO_PLAYER = 0.5f, KB_CRIT = 0.85f; // impulse strength onto the player
+    private static final float KB_SELF = 13.5f, KB_DAMP = 7f;        // knockback imparted TO this bot
+    private static final float KB_TO_PLAYER = 0.9f, KB_CRIT = 1.5f; // impulse strength onto the player
 
-    private static final float RANGED_MIN = 3.8f, RANGED_MAX = 11f, RANGED_CD = 0.85f;
-    private static final float GUN_DMG = 5f, GUN_SPEED = 12f, GUN_KB = 0.35f;
+    private static final float RANGED_MIN = 3.8f, RANGED_MAX = 14f, RANGED_CD = 0.85f;
+    private static final float GUN_DMG = 12.0f, GUN_SPEED = 12f, GUN_KB = 0.65f;
 
+    private static final float EASY_MODE_HEALTH = 10f; // 5 hearts for easy mode
     private static final Color HURT_TINT = new Color(1f, 0f, 0f, 1f);       // pure red
 
     private final Model model;
@@ -89,6 +90,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private final PlayerAnimator animator;
     private final PlayerAnimator.ArmPose armPose = new PlayerAnimator.ArmPose();
     private final Vector3 pos = new Vector3();
+    private final Vector3 targetPos = new Vector3();
     private final Vector3 vel = new Vector3();   // steering velocity (blocks/sec)
     private final Vector3 knock = new Vector3(); // decaying knockback velocity (blocks/sec)
     private float vy;
@@ -101,7 +103,6 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private State state = State.WANDER;
     private float hurtTimer, flashTimer;
     private float attackTimer, lungeTimer, cooldownTimer, rangedCooldown;
-    private float fleeTimer = 0f, healTimer = 0f;
     private float sprintJumpCooldown = 0f;
     private boolean attacking;
     private boolean remoteAttackHeld;
@@ -126,8 +127,25 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private BiPredicate<Float, Float> hazardChecker;
 
     // ---- worn armour (visible layer + damage reduction) ----
-    private final Inventory gear = new Inventory();
-    private final ArmorRenderer armor;
+    private Inventory gear = new Inventory();
+    private ArmorRenderer armor;
+    private boolean prevNetworkAttacking = false;
+    private float clientSpeed = 0f;
+    private boolean clientSprinting = false;
+    private boolean altHand = false;
+    private java.util.function.BooleanSupplier uiSelectedGunSupplier;
+    private java.util.function.Supplier<Float> aimDegFromMouseSupplier;
+    private boolean prevLocalAttackClick = false;
+
+    // ---- ammo + health regeneration for LAN guest / brawler ----
+    private int ammo = 3;
+    private int ammoCapacity = 3;
+    private float ammoRefillTimer = 0f;
+    private boolean dryFire = false;
+    private Loadout prevEquipped = null;
+    private float regenCooldown = 0f;
+    private float regenRate = 0.30f; // faster regen
+    private float regenDelay = 2.0f;  // shorter delay
 
     // ---- inventory + held weapons (same offsets as the player) ----
     private final Inventory loadout = new Inventory();
@@ -162,6 +180,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         this.minX = minX; this.maxX = maxX; this.minZ = minZ; this.maxZ = maxZ;
         pathfinder = new BotPathfinder(minX, maxX, minZ, maxZ);
         pos.set(x, 0f, z);
+        targetPos.set(pos);
         tinted = false;
 
         gear.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
@@ -171,7 +190,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         armor = new ArmorRenderer(gear);
 
         loadout.set(Inventory.HOTBAR_BASE + 0, new ItemStack(ItemType.DIAMOND_SWORD));
-        loadout.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN));
+        loadout.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN)); // potato gun for single player
 
         swordAsset = WeaponModels.buildSword(WeaponModels.SwordVariant.DIAMOND);
         sword = new ModelInstance(swordAsset.model);
@@ -198,13 +217,90 @@ public final class AiBrawler implements CombatTarget, Disposable {
      * Call once after construction before the first update.
      */
     public void setDifficultyScale(float scale) {
-        maxHealth *= scale;
-        health    *= scale;
-        speedScale = scale;
+        if (scale <= 1.01f) {
+            // Easy mode: 10 health (5 hearts)
+            maxHealth = EASY_MODE_HEALTH;
+            health = EASY_MODE_HEALTH;
+        } else {
+            maxHealth *= scale;
+            health    *= scale;
+        }
+        speedScale = 1.0f + (scale - 1.0f) * 0.25f;
+    }
+
+    public void setRegenParams(float rate, float delay) {
+        this.regenRate = rate;
+        this.regenDelay = delay;
+    }
+
+    public int reloadSegments() {
+        if (equipped == Loadout.GUN) return 3;
+        if (equipped == Loadout.FIST) return 2;
+        return 4; // SWORD variant
+    }
+
+    public float reloadSecondsPerSegment() {
+        if (equipped == Loadout.GUN) return 0.9f;
+        if (equipped == Loadout.FIST) return 0.6f;
+        return 0.7f; // SWORD variant
+    }
+
+    private void tickAmmo(float delta) {
+        int cap = reloadSegments();
+        if (equipped != prevEquipped) {
+            boolean firstEquip = prevEquipped == null;
+            prevEquipped = equipped;
+            ammoCapacity = cap;
+            ammoRefillTimer = 0f;
+            if (firstEquip) {
+                ammo = cap;
+            } else {
+                ammo = 0;
+            }
+        } else if (cap != ammoCapacity) {
+            ammoCapacity = cap;
+        }
+        if (ammo < ammoCapacity) {
+            ammoRefillTimer += delta;
+            float per = reloadSecondsPerSegment();
+            while (ammoRefillTimer >= per && ammo < ammoCapacity) {
+                ammo++;
+                ammoRefillTimer -= per;
+            }
+        }
+    }
+
+    public int getAmmo() { return ammo; }
+    public int getAmmoCapacity() { return ammoCapacity; }
+    public boolean pollDryFire() { boolean b = dryFire; dryFire = false; return b; }
+
+    public void setArmorInventory(Inventory inventory) {
+        this.gear = inventory;
+        if (this.armor != null) {
+            this.armor.dispose();
+        }
+        this.armor = new ArmorRenderer(inventory);
     }
 
     public void setMatchStats(MatchStats stats) { this.matchStats = stats; }
     public void setHazardChecker(BiPredicate<Float, Float> hazardChecker) { this.hazardChecker = hazardChecker; }
+
+    public void setUiSelectedGunSupplier(java.util.function.BooleanSupplier supplier) {
+        this.uiSelectedGunSupplier = supplier;
+    }
+
+    public void setAimDegFromMouseSupplier(java.util.function.Supplier<Float> supplier) {
+        this.aimDegFromMouseSupplier = supplier;
+    }
+
+    public boolean isSwordEquipped() {
+        return equipped == Loadout.SWORD;
+    }
+
+    public int getHeldType() {
+        if (equipped == Loadout.SWORD) return 1;
+        return 0;
+    }
 
     /** Worn armour inventory (for UI previews and stat reduction). */
     public Inventory armorInventory() { return gear; }
@@ -237,6 +333,15 @@ public final class AiBrawler implements CombatTarget, Disposable {
         if (lungeTimer > 0f) lungeTimer = Math.max(0f, lungeTimer - delta);
         if (sprintJumpCooldown > 0f) sprintJumpCooldown -= delta;
 
+        tickAmmo(delta);
+
+        if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
+        else if (health < maxHealth) {
+            float before = health;
+            health = Math.min(maxHealth, health + regenRate * delta);
+            if (matchStats != null) matchStats.addHealing(health - before);
+        }
+
         // Vertical physics (jumps / leap-attacks).
         vy -= GRAVITY * delta;
         pos.y += vy * delta;
@@ -263,22 +368,29 @@ public final class AiBrawler implements CombatTarget, Disposable {
                 }
             }
         } else if (dist < MELEE_RANGE && cooldownTimer <= 0f && onGround) {
-            // Leap attack: hop toward the player; the strike lands as we come down → crit.
-            state = State.ATTACK;
-            attacking = true;
-            AudioManager.get().swing();
-            attackTimer = ATTACK_WINDUP;
-            vy = JUMP_V; onGround = false;
-            float l = Math.max(dist, 0.001f);
-            vel.set(dx / l * RUN_SPEED * 1.25f, 0f, dz / l * RUN_SPEED * 1.25f);
-            faceToward(dx, dz);
+            if (ammo >= 1) {
+                // Leap attack: hop toward the player; the strike lands as we come down → crit.
+                state = State.ATTACK;
+                attacking = true;
+                altHand = !altHand;
+                AudioManager.get().swing();
+                attackTimer = ATTACK_WINDUP;
+                vy = JUMP_V; onGround = false;
+                float l = Math.max(dist, 0.001f);
+                vel.set(dx / l * RUN_SPEED * 1.25f, 0f, dz / l * RUN_SPEED * 1.25f);
+                faceToward(dx, dz);
+                ammo--;
+            }
         } else if (dist < AGGRO_RANGE) {
             state = State.CHASE;
             // Weapon inventory: sword up close, potato gun at range.
             equipped = dist > RANGED_MIN ? Loadout.GUN : Loadout.SWORD;
             if (equipped == Loadout.GUN && onGround && dist < RANGED_MAX && rangedCooldown <= 0f) {
-                fireGun(dx, dz, dist);
-                rangedCooldown = RANGED_CD;
+                if (ammo >= 1) {
+                    fireGun(dx, dz, dist);
+                    rangedCooldown = RANGED_CD;
+                    ammo--;
+                }
             }
             float chaseSpeed = dist > STRAFE_RANGE ? RUN_SPEED * CHASE_SPRINT_MUL * speedScale : STRAFE_SPEED * speedScale;
             if (dist > STRAFE_RANGE) {
@@ -303,10 +415,14 @@ public final class AiBrawler implements CombatTarget, Disposable {
                         wp = path.get(0);
                         setCombatSteer(wp.x - pos.x, wp.y - pos.z, chaseSpeed * 1.1f);
                     } else {
+                        // Path exhausted but still no LoS — try perpendicular to find a gap
                         setCombatSteer(dx, dz, chaseSpeed);
                     }
+                } else if (!hasLoS) {
+                    // No path found and no LoS — try strafing perpendicular to find a wall gap
+                    strafe(delta, dx, dz);
                 } else {
-                    if (hasLoS) path.clear(); // clear stale path once LoS is restored
+                    path.clear(); // clear stale path once LoS is restored
                     setCombatSteer(dx, dz, chaseSpeed);
                 }
             } else {
@@ -322,11 +438,11 @@ public final class AiBrawler implements CombatTarget, Disposable {
         integrate(delta);
         applyTransform();
         float horizSpeed = (float) Math.sqrt(vel.x * vel.x + vel.z * vel.z);
-        boolean running = state == State.CHASE || state == State.ATTACK || state == State.FLEE;
+        boolean running = state == State.CHASE || state == State.ATTACK;
         prepareArmPose();
         animator.update(delta, horizSpeed, running, false, onGround, armPose);
         instance.calculateTransforms();
-        anchorWeapon(attacking ? 1f - attackTimer / ATTACK_WINDUP : 0f);
+        anchorWeapon();
         applyTint();
         hearts.update(delta);
         updatePotatoes(delta, player);
@@ -336,7 +452,8 @@ public final class AiBrawler implements CombatTarget, Disposable {
     public void updateRemote(float delta, boolean forward, boolean backward, boolean left, boolean right,
                              boolean jump, boolean sprint, boolean attack, boolean gunHeld,
                              float aimDeg, Player player) {
-        equipped = gunHeld ? Loadout.GUN : Loadout.SWORD;
+        // POTATO_GUN removed for multiplayer - only sword
+        equipped = Loadout.SWORD;
         if (gone) return;
         if (dying) {
             deathTimer = Math.max(0f, deathTimer - delta);
@@ -351,6 +468,15 @@ public final class AiBrawler implements CombatTarget, Disposable {
         if (flashTimer > 0f) flashTimer = Math.max(0f, flashTimer - delta);
         if (cooldownTimer > 0f) cooldownTimer -= delta;
         if (lungeTimer > 0f) lungeTimer = Math.max(0f, lungeTimer - delta);
+
+        tickAmmo(delta);
+
+        if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
+        else if (health < maxHealth) {
+            float before = health;
+            health = Math.min(maxHealth, health + regenRate * delta);
+            if (matchStats != null) matchStats.addHealing(health - before);
+        }
 
         vy -= GRAVITY * delta;
         pos.y += vy * delta;
@@ -370,15 +496,18 @@ public final class AiBrawler implements CombatTarget, Disposable {
         if (!Float.isNaN(aimDeg)) facingDeg = aimDeg;
         if (jump && onGround) { vy = JUMP_V; onGround = false; }
 
-        if (gunHeld && attack && !remoteAttackHeld && rangedCooldown <= 0f) {
-            float fr = facingDeg * MathUtils.degreesToRadians;
-            fireGun(-MathUtils.sin(fr), -MathUtils.cos(fr), RANGED_MAX);
-            rangedCooldown = RANGED_CD;
-        } else if (!gunHeld && attack && !remoteAttackHeld && cooldownTimer <= 0f) {
-            state = State.ATTACK;
-            attacking = true;
-            AudioManager.get().swing();
-            attackTimer = ATTACK_WINDUP;
+        // POTATO_GUN removed - only sword attacks in multiplayer
+        if (attack && !remoteAttackHeld && cooldownTimer <= 0f) {
+            if (ammo >= 1) {
+                state = State.ATTACK;
+                attacking = true;
+                altHand = !altHand;
+                AudioManager.get().swing();
+                attackTimer = ATTACK_WINDUP;
+                ammo--;
+            } else {
+                dryFire = true;
+            }
         }
         remoteAttackHeld = attack;
 
@@ -387,15 +516,17 @@ public final class AiBrawler implements CombatTarget, Disposable {
             if (attackTimer <= 0f) {
                 attacking = false;
                 lungeTimer = ATTACK_LUNGE;
-                cooldownTimer = ATTACK_COOLDOWN;
+                cooldownTimer = 0.05f; // remote player: no extra post-swing delay (ammo system limits rate, matching local player)
                 Vector3 pp = player.getPosition();
                 float dx = pp.x - pos.x, dz = pp.z - pos.z;
                 float dist = (float) Math.sqrt(dx * dx + dz * dz);
                 boolean crit = pos.y > 0.25f && vy < 0f;
                 if (dist < MELEE_HIT_RANGE && CombatLoS.clear(collider, pos.x, pos.z, pp.x, pp.z)) {
                     dir.set(dx, 0f, dz).nor();
-                    float dmg = MELEE_DAMAGE * (crit ? CRIT_MULT : 1f);
-                    player.applyHit(dmg, dir, crit ? KB_CRIT : KB_TO_PLAYER);
+                    // Use the same raw damage as the host's diamond sword (WeaponController.meleeBaseDamage)
+                    // so both players deal identical pre-armour damage and the fight is symmetric.
+                    float dmg = 6f * (crit ? 1.5f : 1f);   // 6 normal, 9 crit  (same as WeaponController)
+                    player.applyHit(dmg, dir, crit ? KB_CRIT : 0.8f); // 0.8 matches Player.KB_H
                     if (matchStats != null) matchStats.addDamage(dmg);
                 }
             }
@@ -407,7 +538,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         prepareArmPose();
         animator.update(delta, horizSpeed, sprint, false, onGround, armPose);
         instance.calculateTransforms();
-        anchorWeapon(attacking ? 1f - attackTimer / ATTACK_WINDUP : 0f);
+        anchorWeapon();
         applyTint();
         hearts.update(delta);
         updatePotatoes(delta, player);
@@ -415,21 +546,45 @@ public final class AiBrawler implements CombatTarget, Disposable {
 
     /** Apply an authoritative network snapshot for client-side rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated) {
-        setNetworkSnapshot(x, y, z, health, facingDeg, eliminated, false, false, false, false);
+        setNetworkSnapshot(x, y, z, health, facingDeg, eliminated, false, false, false, 0);
     }
 
     /** Apply an authoritative network snapshot plus visual animation state for client-side rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated,
-                                   boolean moving, boolean sprinting, boolean attacking, boolean gunHeld) {
-        pos.set(x, y, z);
-        vel.set(0f, 0f, 0f);
-        knock.set(0f, 0f, 0f);
-        vy = 0f;
+                                   boolean moving, boolean sprinting, boolean attacking, int heldType) {
+        targetPos.set(x, y, z);
+        boolean isLocalGuest = uiSelectedGunSupplier != null;
+        if (isLocalGuest) {
+            if (pos.dst2(targetPos) > 4f) {
+                pos.set(targetPos);
+                vel.set(0f, 0f, 0f);
+                knock.set(0f, 0f, 0f);
+                vy = 0f;
+            }
+        } else {
+            if (pos.dst2(targetPos) > 16f) {
+                pos.set(targetPos);
+            }
+            vel.set(0f, 0f, 0f);
+            knock.set(0f, 0f, 0f);
+            vy = 0f;
+        }
         this.health = MathUtils.clamp(health, 0f, maxHealth);
         this.facingDeg = facingDeg;
-        equipped = gunHeld ? Loadout.GUN : Loadout.SWORD;
-        this.attacking = attacking && !gunHeld;
-        if (this.attacking && attackTimer <= 0f) attackTimer = ATTACK_WINDUP * 0.5f;
+        // POTATO_GUN removed - only sword
+        equipped = heldType == 1 ? Loadout.SWORD : Loadout.FIST;
+
+        boolean justAttacked = attacking && !prevNetworkAttacking;
+        prevNetworkAttacking = attacking;
+        if (justAttacked) {
+            // POTATO_GUN removed - only sword
+            if (!this.attacking) {
+                this.attacking = true;
+                altHand = !altHand;
+                attackTimer = ATTACK_WINDUP;
+            }
+        }
+
         if (eliminated || this.health <= 0f) {
             if (!dying && !gone) startDeath();
         } else {
@@ -438,11 +593,108 @@ public final class AiBrawler implements CombatTarget, Disposable {
             deathTimer = 0f;
         }
         applyTransform();
-        prepareArmPose();
-        animator.update(1f / 60f, moving ? (sprinting ? RUN_SPEED * CHASE_SPRINT_MUL : RUN_SPEED) : 0f,
-            sprinting, false, true, armPose);
-        anchorWeapon(0f);
+        clientSpeed = moving ? (sprinting ? RUN_SPEED * CHASE_SPRINT_MUL : RUN_SPEED) : 0f;
+        clientSprinting = sprinting;
         applyTint();
+    }
+
+    /** Smoothly update visual state (animations, potato projectiles, hearts, hurt flashes) on the client. */
+    public void updateClient(float delta, Player player, boolean controllable) {
+        if (gone) { updatePotatoes(delta, player); return; }
+        if (dying) {
+            deathTimer = Math.max(0f, deathTimer - delta);
+            applyDeathTransform();
+            applyTint();
+            hearts.update(delta);
+            updatePotatoes(delta, player);
+            if (deathTimer <= 0f) gone = true;
+            return;
+        }
+        if (hurtTimer > 0f) hurtTimer = Math.max(0f, hurtTimer - delta);
+        if (flashTimer > 0f) flashTimer = Math.max(0f, flashTimer - delta);
+        if (cooldownTimer > 0f) cooldownTimer -= delta;
+        if (rangedCooldown > 0f) rangedCooldown -= delta;
+
+        tickAmmo(delta);
+
+        if (regenCooldown > 0f) regenCooldown = Math.max(0f, regenCooldown - delta);
+        else if (health < maxHealth) {
+            health = Math.min(maxHealth, health + regenRate * delta);
+        }
+
+        if (controllable) {
+            Settings cfg = Settings.get();
+            boolean forward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.FORWARD));
+            boolean backward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.BACKWARD));
+            boolean left = Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT));
+            boolean right = Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT));
+            boolean jump = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+            boolean sprint = jump && (forward || backward || left || right);
+
+            vy -= GRAVITY * delta;
+            pos.y += vy * delta;
+            if (pos.y <= 0f) { pos.y = 0f; vy = 0f; onGround = true; } else onGround = false;
+
+            float mx = (right ? 1f : 0f) - (left ? 1f : 0f);
+            float mz = (backward ? 1f : 0f) - (forward ? 1f : 0f);
+            float moveLen2 = mx * mx + mz * mz;
+            boolean moving = moveLen2 > 0.001f;
+            if (moving) {
+                float speed = (sprint ? RUN_SPEED * CHASE_SPRINT_MUL : RUN_SPEED) * speedScale;
+                setSteer(mx, mz, speed);
+            } else {
+                float stop = (float) Math.exp(-ACCEL * delta);
+                vel.x *= stop;
+                vel.z *= stop;
+            }
+            if (jump && onGround) { vy = JUMP_V; onGround = false; }
+
+            integrate(delta);
+
+            pos.lerp(targetPos, Math.min(1f, delta * 6f));
+
+            float localAim = aimDegFromMouseSupplier != null ? aimDegFromMouseSupplier.get() : Float.NaN;
+            if (!Float.isNaN(localAim)) {
+                facingDeg = localAim;
+            }
+
+            boolean click = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
+            if (click && !prevLocalAttackClick) {
+                // POTATO_GUN removed for multiplayer - only sword attacks
+                if (cooldownTimer <= 0f && !attacking) {
+                    if (ammo >= 1) {
+                        attacking = true;
+                        altHand = !altHand;
+                        attackTimer = ATTACK_WINDUP;
+                        cooldownTimer = ATTACK_COOLDOWN;
+                        AudioManager.get().swing();
+                        ammo--;
+                    } else {
+                        dryFire = true;
+                    }
+                }
+            }
+            prevLocalAttackClick = click;
+            clientSpeed = moving ? (sprint ? RUN_SPEED * CHASE_SPRINT_MUL : RUN_SPEED) : 0f;
+            clientSprinting = sprint;
+        } else {
+            pos.lerp(targetPos, Math.min(1f, delta * 20f));
+        }
+
+        if (attacking) {
+            attackTimer -= delta;
+            if (attackTimer <= 0f) {
+                attacking = false;
+            }
+        }
+        applyTransform();
+        prepareArmPose();
+        animator.update(delta, clientSpeed, clientSprinting, false, onGround, armPose);
+        instance.calculateTransforms();
+        anchorWeapon();
+        applyTint();
+        hearts.update(delta);
+        updatePotatoes(delta, player);
     }
 
     /** Steer the velocity smoothly toward (dirX,dirZ) at {@code speed} (momentum, no snapping). */
@@ -568,20 +820,81 @@ public final class AiBrawler implements CombatTarget, Disposable {
         p.launch(muzzle, launchVel, MathUtils.clamp(dist, 3f, 12f));
     }
 
+    private static final float WINDUP     = 0.30f;
+    private static final float SNAP_EXP   = 8f;
+    private static final float ARM_PITCH_HI = 140f, ARM_PITCH_LO = 55f;
+    private static final float WINDUP_DEG = 35f;
+    private static final float DRIVE_DEG  = 55f;
+    private static final float SWORD_READY_PITCH = 75f;
+    private static final float SWORD_READY_YAW = 6f;
+    private static final float SWORD_READY_ROLL = 0f;
+    private static final float SWORD_READY_BLEND = 0.2f;
+    private static final float D2R = MathUtils.degreesToRadians;
+
+    private static float smoothstep(float t) {
+        return t * t * (3f - 2f * t);
+    }
+
     private void prepareArmPose() {
         armPose.reset();
-        if (equipped == Loadout.GUN && !attacking) {
+        if (equipped == Loadout.GUN) {
             armPose(armPose.lRot, GUN_R_PITCH, GUN_R_YAW, GUN_R_ROLL);
             armPose.lWeight = 1f;
             armPose(armPose.rRot, GUN_L_PITCH, GUN_L_YAW, GUN_L_ROLL);
             armPose.rWeight = 1f;
+        } else if (equipped == Loadout.SWORD && !attacking) {
+            armPose(armPose.lRot, SWORD_READY_PITCH, SWORD_READY_YAW, SWORD_READY_ROLL);
+            armPose.lWeight = SWORD_READY_BLEND;
         } else if (attacking) {
             float p = MathUtils.clamp(1f - attackTimer / ATTACK_WINDUP, 0f, 1f);
-            float pitch = MathUtils.lerp(140f, 55f, p);
-            float sweep = MathUtils.lerp(60f, -45f, p);
-            armPose(armPose.lRot, pitch, sweep, 0f);
-            armPose.lWeight = 1f;
-            armPose.bodyYaw = MathUtils.lerp(-35f, 55f, p) * MathUtils.degreesToRadians;
+            if (equipped == Loadout.FIST) {
+                // Punch pose
+                float ext;
+                if (p < 0.45f) ext = 1f - (float) Math.pow(1f - p / 0.45f, 6f);
+                else ext = 1f - smoothstep((p - 0.45f) / 0.55f);
+
+                float w;
+                if (p < 0.05f) w = p / 0.05f;
+                else if (p > 0.6f) w = Math.max(0f, 1f - smoothstep((p - 0.6f) / 0.4f));
+                else w = 1f;
+
+                float pitch = MathUtils.lerp(28f, 102f, ext);
+                armPose(armPose.lRot, pitch, 8f, 0f);
+                armPose.lWeight = Math.max(armPose.lWeight, w);
+                armPose.bodyYaw = 16f * ext * D2R;
+            } else {
+                // Sword swing pose
+                float a;
+                if (p < WINDUP) a = 0f;
+                else {
+                    float t = (p - WINDUP) / (1f - WINDUP);
+                    a = 1f - (float) Math.pow(1f - t, SNAP_EXP);
+                }
+                float w;
+                if (p < 0.04f) w = p / 0.04f;
+                else if (p > 0.55f) w = Math.max(0f, 1f - smoothstep((p - 0.55f) / 0.45f));
+                else w = 1f;
+
+                float pitch = MathUtils.lerp(ARM_PITCH_HI, ARM_PITCH_LO, a);
+                float sweepStart = altHand ? 60f : -30f;
+                float sweepEnd   = altHand ? -45f : 90f;
+                float sweep = MathUtils.lerp(sweepStart, sweepEnd, a);
+                armPose(armPose.lRot, pitch, sweep, 0f);
+                armPose.lWeight = Math.max(armPose.lWeight, w);
+
+                float drive = altHand ? -1f : 1f;
+                float twist;
+                if (p < WINDUP) {
+                    twist = MathUtils.lerp(0f, -WINDUP_DEG, smoothstep(p / WINDUP));
+                } else {
+                    float t = (p - WINDUP) / (1f - WINDUP);
+                    float snap = 1f - (float) Math.pow(1f - t, SNAP_EXP);
+                    float peak = MathUtils.lerp(-WINDUP_DEG, DRIVE_DEG, snap);
+                    float rec = smoothstep(MathUtils.clamp((t - 0.30f) / 0.70f, 0f, 1f));
+                    twist = MathUtils.lerp(peak, 0f, rec);
+                }
+                armPose.bodyYaw = drive * twist * D2R;
+            }
         }
     }
 
@@ -619,6 +932,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         if (dying || gone) return;
         health = Math.max(0f, health - raw);
         AudioManager.get().hurt();
+        regenCooldown = regenDelay;
         hurtTimer = HURT_DUR;
         flashTimer = FLASH_DUR;
         tinted = false;
@@ -631,6 +945,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         float dealt = ArmorStats.reduce(damage, gear);
         health = Math.max(0f, health - dealt);
         AudioManager.get().hurt();
+        regenCooldown = regenDelay;
         hurtTimer = HURT_DUR;
         flashTimer = FLASH_DUR;
         tinted = false;
@@ -663,20 +978,12 @@ public final class AiBrawler implements CombatTarget, Disposable {
     }
 
     /** Place the active weapon using the same offsets as {@link com.brawlgame.combat.WeaponController}. */
-    private void anchorWeapon(float windup) {
-        if (equipped == Loadout.GUN && !attacking) {
-            // Use clean body mat (no hurt/lunge tilt) so gun sits exactly as the player's does.
+    private void anchorWeapon() {
+        if (equipped == Loadout.GUN) {
             WeaponAnchors.placeGun(gun.transform, cleanBodyMat);
-            return;
-        }
-        WeaponAnchors.placeSword(weaponMat, instance.transform, rightArm.globalTransform);
-        sword.transform.set(weaponMat);
-        if (attacking) {
-            float pitch = MathUtils.lerp(70f, 165f, windup);
-            sword.transform.rotate(Vector3.X, pitch - 70f);
-        } else if (lungeTimer > 0f) {
-            float pitch = MathUtils.lerp(165f, 15f, 1f - lungeTimer / ATTACK_LUNGE);
-            sword.transform.rotate(Vector3.X, pitch - 70f);
+        } else if (equipped == Loadout.SWORD) {
+            WeaponAnchors.placeSword(weaponMat, instance.transform, rightArm.globalTransform);
+            sword.transform.set(weaponMat);
         }
     }
 
@@ -688,7 +995,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
             .setTranslation(pos)
             .rotate(Vector3.Z, roll);
         instance.calculateTransforms();
-        anchorWeapon(0f);
+        anchorWeapon();
     }
 
     private void applyTint() {
@@ -721,6 +1028,8 @@ public final class AiBrawler implements CombatTarget, Disposable {
     public float maxHealth()  { return maxHealth; }
     public float facingDeg()  { return facingDeg; }
     public boolean isAttacking() { return attacking; }
+    /** 0 = not hurt, 1 = just hit — drives the red screen vignette on CLIENT. */
+    public float hurtFraction() { return Math.max(0f, hurtTimer / HURT_DUR); }
     public boolean isGunEquipped() { return equipped == Loadout.GUN; }
     public boolean isMoving() { return vel.x * vel.x + vel.z * vel.z > 0.08f; }
     @Override public Vector3 position() { return pos; }

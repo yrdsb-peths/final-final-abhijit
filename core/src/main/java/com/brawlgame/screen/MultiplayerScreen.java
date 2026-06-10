@@ -187,6 +187,7 @@ public final class MultiplayerScreen implements Screen {
         if (map != null) {
             GameServer handoff = server;
             server = null;
+            AudioManager.get().stopMenuMusic();
             game.setScreen(new GameScreen(game, map, handoff));
         }
         else panel = Panel.HOME;
@@ -278,8 +279,12 @@ public final class MultiplayerScreen implements Screen {
         if (client.connect(si.host, si.port)) {
             GameMap map = loadDefaultMap();
             discovery.stopScan();
-            if (map != null) game.setScreen(new GameScreen(game, map, client));
-            else client.close();
+            if (map != null) {
+                AudioManager.get().stopMenuMusic();
+                game.setScreen(new GameScreen(game, map, client));
+            } else {
+                client.close();
+            }
         } else {
             client.close();
         }

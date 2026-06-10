@@ -86,7 +86,8 @@ public final class OverheadHud implements Disposable {
         tmp.set(world);
         cam.project(tmp);
         if (tmp.z > 1f) return false;
-        uiv.unproject(tmp.x, tmp.y, vc);
+        // cam.project returns y-up screen coords; uiv.unproject expects y-down (libGDX input style).
+        uiv.unproject(tmp.x, Gdx.graphics.getHeight() - tmp.y, vc);
         return true;
     }
 
@@ -127,7 +128,7 @@ public final class OverheadHud implements Disposable {
         beginHud();
 
         float cx = vc.x, top = vc.y + HEAD_CLEARANCE;
-        float barX = cx - BAR_W * 0.5f, hpBarY = top - 36f;
+        float barX = cx - BAR_W * 0.5f, hpBarY = top - 38f; // consistent with render()
 
         shapes.begin(ShapeType.Filled);
         bedrockBar(barX, hpBarY, BAR_W, 14);
@@ -137,7 +138,7 @@ public final class OverheadHud implements Disposable {
 
         batch.begin();
         outlined(name, cx, top, 1.0f, new Color(1f, 0.55f, 0.45f, 1f));
-        outlined(Math.round(hp) + " / " + Math.round(maxHp), cx, top - 22f, 0.85f, Color.WHITE);
+        outlined(Math.round(hp) + " / " + Math.round(maxHp), cx, top - 24f, 1.0f, Color.WHITE); // consistent positioning
         batch.end();
         endHud();
     }
@@ -147,12 +148,44 @@ public final class OverheadHud implements Disposable {
         beginHud();
         batch.begin();
         font.getData().setScale(1.3f);
+        float y = uiv.height() - 110f; // Moved down from 22f to avoid overlap with local HUD
         font.setColor(0f, 0f, 0f, 0.9f);
-        font.draw(batch, text, 22f, uiv.height() - 22f);
-        font.draw(batch, text, 24f, uiv.height() - 22f);
+        font.draw(batch, text, 22f, y);
+        font.draw(batch, text, 24f, y);
         font.setColor(1f, 1f, 1f, 1f);
-        font.draw(batch, text, 23f, uiv.height() - 21f);
+        font.draw(batch, text, 23f, y + 1f);
         font.getData().setScale(1f);
+        batch.end();
+        endHud();
+    }
+
+    /** Render a static HUD for the local player at a fixed screen position. */
+    public void renderLocal(String name, float hp, float maxHp) {
+        beginHud();
+        float x = 22f, y = uiv.height() - 60f;
+        float barW = 220f, barH = 22f;
+
+        shapes.begin(ShapeType.Filled);
+        bedrockBar(x, y, barW, barH);
+        shapes.setColor(HP_BACK); shapes.rect(x, y, barW, barH);
+        shapes.setColor(HP_FILL); shapes.rect(x, y, barW * clamp01(hp / maxHp), barH);
+
+        // Reload bar below HP
+        float segY = y - 18f;
+        int n = capacity;
+        bedrockBar(x, segY, barW, 10);
+        float gap = 3f, segW = (barW - (n - 1) * gap) / n;
+        boolean flashing = flashTimer > 0f;
+        for (int i = 0; i < n; i++) {
+            float sx = x + i * (segW + gap);
+            shapes.setColor(flashing ? SEG_DRY : i < loaded ? SEG_FILL : SEG_EMPTY);
+            shapes.rect(sx, segY, segW, 10);
+        }
+        shapes.end();
+
+        batch.begin();
+        outlined(name, x + barW * 0.5f, y + barH + 28f, 1.3f, NAME);
+        outlined(Math.round(hp) + " / " + Math.round(maxHp), x + barW * 0.5f, y + barH * 0.5f + 8f, 1.0f, Color.WHITE);
         batch.end();
         endHud();
     }

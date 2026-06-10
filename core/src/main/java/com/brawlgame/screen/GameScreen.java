@@ -97,6 +97,7 @@ public final class GameScreen implements Screen {
     private GroundIndicator ground;
     private PlayerUI ui;
     private Inventory inventory;
+    private Inventory remoteInventory;
     private ArmorRenderer armor;
     private PauseOverlay pause;
     private InputMultiplexer uiMux;
@@ -174,6 +175,8 @@ public final class GameScreen implements Screen {
         cameraRig = new CameraRig();
         // South (+Z) boundary so the follow camera elevates before clipping the canyon there.
         cameraRig.setBottomBoundary(map.worldZ(map.rows() - 1));
+        // Guest camera sits on the north side so their character always appears at screen-bottom.
+        if (networkRole == NetworkRole.CLIENT) cameraRig.setFlipped(true);
         library = new BlockLibrary(map.theme());
         renderer = new MapRenderer(map, library);
         renderer.setGameplayMode(true); // hide SPAWN/CHEST/BUSH editor markers during live play
@@ -225,7 +228,22 @@ public final class GameScreen implements Screen {
         endScreen = new EndScreenOverlay();
 
         bot = new AiBrawler(botSkin, botStartX, botStartZ, bMinX, bMaxX, bMinZ, bMaxZ);
-        if (difficultyScale != 1f) bot.setDifficultyScale(difficultyScale);
+        if (networkRole == NetworkRole.SOLO) {
+            // In solo mode apply difficulty: scales HP, speed, and regen for the AI rival.
+            bot.setDifficultyScale(difficultyScale);
+            player.setDifficultyScale(difficultyScale);
+            if (difficultyScale <= 1.01f) {
+                bot.setRegenParams(0.05f, 6.0f);
+            } else if (difficultyScale <= 1.51f) {
+                bot.setRegenParams(0.12f, 4.0f);
+            } else {
+                bot.setRegenParams(0.25f, 2.5f);
+            }
+        } else {
+            // In multiplayer the bot IS the guest player — keep full 20 HP (same as host).
+            player.setRegenParams(0.15f, 4.0f);
+            bot.setRegenParams(0.15f, 4.0f);
+        }
         bot.setHazardChecker((x, z) -> gas != null && gas.isActive() && gas.inGas(x, z));
         player.getWeapon().setTarget(bot);
         player.setMatchElimination(true);
@@ -253,27 +271,70 @@ public final class GameScreen implements Screen {
 
         inventory = new Inventory();
         inventory.set(Inventory.HOTBAR_BASE + 0, new ItemStack(ItemType.DIAMOND_SWORD));
-        inventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN));
-        inventory.set(Inventory.HOTBAR_BASE + 2, new ItemStack(ItemType.IRON_SWORD));
-        // Equip a diamond set so worn armour is visible on the map (swap via the creative menu, /).
+        // POTATO_GUN: only for single player (removed for multiplayer due to lag)
+        if (networkRole == NetworkRole.SOLO) {
+            inventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.POTATO_GUN));
+        } else {
+            inventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.IRON_SWORD));
+        }
         inventory.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
         inventory.set(Inventory.ARMOR_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
         inventory.set(Inventory.ARMOR_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
         inventory.set(Inventory.ARMOR_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
-        ui = new PlayerUI(inventory);
-        armor = new ArmorRenderer(inventory);          // worn armour parented to the rig
-        player.setHeldItemSupplier(ui::selectedItem);  // weapon follows the selected hotbar slot
-        player.getWeapon().setIconResolver(ui::iconTexture); // armour/items shown held in the fist
-        player.setInventory(inventory);                // worn armour feeds the damage formula
-        ui.setPreviewSkin(skin);
-        pause = new PauseOverlay(game, skin);
 
         showcase = new CharacterShowcase();
-        showcasePlayer = showcase.add(skin, inventory);
-        showcaseRival = showcase.add(skin, bot.armorInventory());
-        matchIntro = new MatchIntro(showcase, new int[] {showcasePlayer, showcaseRival},
-            new String[] {"You", "Rival"}, INTRO_DUR);
+
+        if (networkRole == NetworkRole.CLIENT) {
+            remoteInventory = new Inventory();
+            remoteInventory.set(Inventory.HOTBAR_BASE + 0, new ItemStack(ItemType.DIAMOND_SWORD));
+            // POTATO_GUN removed for multiplayer - client (local guest) uses sword only
+            remoteInventory.set(Inventory.HOTBAR_BASE + 1, new ItemStack(ItemType.IRON_SWORD));
+            remoteInventory.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
+            remoteInventory.set(Inventory.ARMOR_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
+            remoteInventory.set(Inventory.ARMOR_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
+            remoteInventory.set(Inventory.ARMOR_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
+
+            bot.setArmorInventory(inventory);
+            // POTATO_GUN removed for multiplayer - no gun supplier needed
+            bot.setAimDegFromMouseSupplier(() -> aimDegFromMouse(bot.position()));
+            player.setInventory(remoteInventory);
+            armor = new ArmorRenderer(remoteInventory); // remote host's armor
+            ui = new PlayerUI(inventory);
+            player.getWeapon().setIconResolver(ui::iconTexture);
+            ui.setPreviewSkin(botSkin);
+            pause = new PauseOverlay(game, botSkin);
+
+            showcasePlayer = showcase.add(botSkin, inventory);
+            showcaseRival = showcase.add(skin, remoteInventory);
+            matchIntro = new MatchIntro(showcase, new int[] {showcasePlayer, showcaseRival},
+                new String[] {"You", "Host"}, INTRO_DUR);
+        } else {
+            ui = new PlayerUI(inventory);
+            armor = new ArmorRenderer(inventory); // player's armor
+            player.setHeldItemSupplier(ui::selectedItem);
+            player.getWeapon().setIconResolver(ui::iconTexture);
+            player.setInventory(inventory);
+            ui.setPreviewSkin(skin);
+            pause = new PauseOverlay(game, skin);
+
+            showcasePlayer = showcase.add(skin, inventory);
+            showcaseRival = showcase.add(botSkin, bot != null ? bot.armorInventory() : null);
+            matchIntro = new MatchIntro(showcase, new int[] {showcasePlayer, showcaseRival},
+                new String[] {"You", networkRole == NetworkRole.HOST ? "Guest" : "Rival"}, INTRO_DUR);
+        }
+
         endScreen.bindShowcase(showcase, showcasePlayer, showcaseRival);
+
+        // HOST: pre-seed the bot's (guest's) armour with diamond so onHit() can reduce damage
+        // from the very first frame. The client will confirm/update the pieces each INPUT message.
+        // Without this, the bot's gear Inventory starts empty → full damage until the first packet.
+        if (networkRole == NetworkRole.HOST) {
+            Inventory botGear = bot.armorInventory();
+            botGear.set(Inventory.ARMOR_BASE + 0, new ItemStack(ItemType.DIAMOND_HELMET));
+            botGear.set(Inventory.ARMOR_BASE + 1, new ItemStack(ItemType.DIAMOND_CHESTPLATE));
+            botGear.set(Inventory.ARMOR_BASE + 2, new ItemStack(ItemType.DIAMOND_LEGGINGS));
+            botGear.set(Inventory.ARMOR_BASE + 3, new ItemStack(ItemType.DIAMOND_BOOTS));
+        }
 
         ui.setDropHandler(stack -> drops.add(new ItemEntity(stack, ui.iconTexture(stack.type),
             player.getPosition().x, player.getPosition().z, player.getFacingDeg())));
@@ -333,12 +394,19 @@ public final class GameScreen implements Screen {
         boolean intro = cameraRig.isIntroActive();
         if (intro) matchIntro.update(d);
         else if (!matchEnded) match.start();
-        if (!pause.isOpen() && !matchEnded) {
+
+        boolean isMultiplayer = networkRole != NetworkRole.SOLO;
+        boolean shouldUpdateWorld = !pause.isOpen() || isMultiplayer;
+
+        if (shouldUpdateWorld && !matchEnded) {
             if (networkRole == NetworkRole.CLIENT) {
                 pollClientState();
                 if (!intro) sendClientInput();
                 cameraRig.update(d, localCameraTarget(), false);
                 if (!intro) {
+                    bot.updateClient(d, player, true);
+                    player.updateRemoteClient(d);
+                    overhead.update(d, bot.getAmmo(), bot.getAmmoCapacity(), bot.pollDryFire());
                     match.update(d);
                     water.update(d);
                     gas.update(d);
@@ -346,7 +414,8 @@ public final class GameScreen implements Screen {
                 }
             } else {
                 if (networkRole == NetworkRole.HOST) pollRemoteInput();
-                if (!intro) player.update(d, cameraRig.camera);
+                boolean controllable = !pause.isOpen();
+                if (!intro) player.update(d, cameraRig.camera, controllable);
                 cameraRig.update(d, player.getPosition(), player.isSprinting());
                 if (intro) { /* gameplay (drops, ammo, gas, rival) resumes once the intro finishes */ }
                 else {
@@ -374,7 +443,7 @@ public final class GameScreen implements Screen {
                 if (gasTick && gas.inGas(bot.position().x, bot.position().z)) bot.damage(GAS_DAMAGE);
                 if (bot.isDead() && brawlersLeft > 1) brawlersLeft = 1;
                 checkMatchEnd(gasTick);
-                if (Settings.get().justPressed(Settings.Action.DROP)) {
+                if (controllable && Settings.get().justPressed(Settings.Action.DROP)) {
                     ItemStack d2 = ui.takeOneFromSelectedHotbar();
                     if (d2 != null) drops.add(new ItemEntity(d2, ui.iconTexture(d2.type),
                         player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
@@ -396,23 +465,48 @@ public final class GameScreen implements Screen {
         String line = netServer.pollClientInput();
         if (line == null || line.isEmpty()) return;
         remoteInput.parse(line);
+        if (bot != null && remoteInput.arm0 != null) {
+            setArmorSlot(bot.armorInventory(), 0, remoteInput.arm0);
+            setArmorSlot(bot.armorInventory(), 1, remoteInput.arm1);
+            setArmorSlot(bot.armorInventory(), 2, remoteInput.arm2);
+            setArmorSlot(bot.armorInventory(), 3, remoteInput.arm3);
+        }
     }
 
     private void sendClientInput() {
         if (netClient == null || !netClient.isConnected()) return;
-        Settings cfg = Settings.get();
-        boolean forward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.FORWARD));
-        boolean backward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.BACKWARD));
-        boolean left = Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT));
-        boolean right = Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT));
-        boolean jump = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
-        boolean sprint = jump && (forward || backward || left || right);
-        boolean attack = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
-        boolean gun = ui != null && ui.selectedItem() == ItemType.POTATO_GUN;
-        float aimDeg = aimDegFromMouse(bot != null ? bot.position() : player.getPosition());
-        netClient.sendInput(String.format(Locale.US, "INPUT %d %d %d %d %d %d %d %d %.2f",
+        boolean forward = false, backward = false, left = false, right = false, jump = false, sprint = false, attack = false, gun = false;
+        float aimDeg = Float.NaN;
+
+        if (!pause.isOpen()) {
+            Settings cfg = Settings.get();
+            forward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.FORWARD));
+            backward = Gdx.input.isKeyPressed(cfg.key(Settings.Action.BACKWARD));
+            left = Gdx.input.isKeyPressed(cfg.key(Settings.Action.LEFT));
+            right = Gdx.input.isKeyPressed(cfg.key(Settings.Action.RIGHT));
+            jump = Gdx.input.isKeyPressed(cfg.key(Settings.Action.JUMP));
+            // The guest camera is flipped 180° (north side, looking south) so all movement
+            // directions are inverted relative to screen. Swap both axis pairs to compensate.
+            boolean tmp = forward; forward = backward; backward = tmp;
+            tmp = left; left = right; right = tmp;
+            sprint = jump && (forward || backward || left || right);
+            attack = Gdx.input.isButtonPressed(Input.Buttons.LEFT);
+            gun = ui != null && ui.selectedItem() == ItemType.POTATO_GUN;
+            aimDeg = aimDegFromMouse(bot != null ? bot.position() : player.getPosition());
+        }
+
+        ItemStack arm0 = inventory.get(Inventory.ARMOR_BASE + 0);
+        ItemStack arm1 = inventory.get(Inventory.ARMOR_BASE + 1);
+        ItemStack arm2 = inventory.get(Inventory.ARMOR_BASE + 2);
+        ItemStack arm3 = inventory.get(Inventory.ARMOR_BASE + 3);
+
+        netClient.sendInput(String.format(Locale.US, "INPUT %d %d %d %d %d %d %d %d %.2f %s %s %s %s",
             bit(forward), bit(backward), bit(left), bit(right), bit(jump), bit(sprint),
-            bit(attack), bit(gun), aimDeg));
+            bit(attack), bit(gun), aimDeg,
+            arm0 != null ? arm0.type.name() : "NONE",
+            arm1 != null ? arm1.type.name() : "NONE",
+            arm2 != null ? arm2.type.name() : "NONE",
+            arm3 != null ? arm3.type.name() : "NONE"));
     }
 
     private void pollClientState() {
@@ -426,12 +520,28 @@ public final class GameScreen implements Screen {
         if (netServer == null || !netServer.isClientConnected()) return;
         Vector3 p = player.getPosition();
         Vector3 b = bot.position();
+
+        ItemStack h0 = player.getInventory().get(Inventory.ARMOR_BASE + 0);
+        ItemStack h1 = player.getInventory().get(Inventory.ARMOR_BASE + 1);
+        ItemStack h2 = player.getInventory().get(Inventory.ARMOR_BASE + 2);
+        ItemStack h3 = player.getInventory().get(Inventory.ARMOR_BASE + 3);
+
+        ItemStack b0 = bot.armorInventory().get(Inventory.ARMOR_BASE + 0);
+        ItemStack b1 = bot.armorInventory().get(Inventory.ARMOR_BASE + 1);
+        ItemStack b2 = bot.armorInventory().get(Inventory.ARMOR_BASE + 2);
+        ItemStack b3 = bot.armorInventory().get(Inventory.ARMOR_BASE + 3);
+
         netServer.sendState(String.format(Locale.US,
-            "STATE %.3f %.3f %.3f %.3f %.2f %d %.3f %.3f %.3f %.3f %.2f %d %d %d %d %d %d %d %d",
+            "STATE %.3f %.3f %.3f %.3f %.2f %d %.3f %.3f %.3f %.3f %.2f %d %d %d %d %d %d %d %d %d %s %s %s %s",
             p.x, p.y, p.z, player.getHealth(), player.getFacingDeg(), bit(player.isEliminated()),
             b.x, b.y, b.z, bot.health(), bot.facingDeg(), bit(bot.isDead() || bot.isDying()),
-            bit(bot.isMoving()), bit(remoteInput.sprint), bit(bot.isAttacking()), bit(bot.isGunEquipped()),
-            bit(player.isMoving()), bit(player.isSprinting()), bit(ui != null && ui.selectedItem() == ItemType.POTATO_GUN)));
+            bit(bot.isMoving()), bit(remoteInput.sprint), bit(bot.isAttacking()), 0, // gun removed
+            bit(player.isMoving()), bit(player.isSprinting()), 0, // gun removed for player too
+            bit(player.getWeapon().isAttacking()),
+            h0 != null ? h0.type.name() : "NONE",
+            h1 != null ? h1.type.name() : "NONE",
+            h2 != null ? h2.type.name() : "NONE",
+            h3 != null ? h3.type.name() : "NONE"));
     }
 
     private void applyServerState(String line) {
@@ -457,9 +567,21 @@ public final class GameScreen implements Screen {
             boolean pm = parts.length > 17 && "1".equals(parts[17]);
             boolean ps = parts.length > 18 && "1".equals(parts[18]);
             boolean pg = parts.length > 19 && "1".equals(parts[19]);
-            player.setNetworkSnapshot(px, py, pz, ph, pf, pe, pm, ps, pg);
-            bot.setNetworkSnapshot(bx, by, bz, bh, bf, be, bm, bs, ba, bg);
+            boolean pa = parts.length > 20 && "1".equals(parts[20]);
+            player.setNetworkSnapshot(px, py, pz, ph, pf, pe, pm, ps, pg ? 2 : 1, pa);
+            bot.setNetworkSnapshot(bx, by, bz, bh, bf, be, bm, bs, ba, bg ? 2 : 1);
             if ((pe || be) && brawlersLeft > 1) brawlersLeft = 1;
+
+            if (parts.length >= 25) {
+                String h0 = parts[21];
+                String h1 = parts[22];
+                String h2 = parts[23];
+                String h3 = parts[24];
+                setArmorSlot(remoteInventory, 0, h0);
+                setArmorSlot(remoteInventory, 1, h1);
+                setArmorSlot(remoteInventory, 2, h2);
+                setArmorSlot(remoteInventory, 3, h3);
+            }
         } catch (NumberFormatException ignored) {
         }
     }
@@ -494,6 +616,7 @@ public final class GameScreen implements Screen {
     private static final class RemoteInput {
         boolean forward, backward, left, right, jump, sprint, attack, gun;
         float aimDeg = Float.NaN;
+        String arm0 = "NONE", arm1 = "NONE", arm2 = "NONE", arm3 = "NONE";
 
         void parse(String line) {
             String[] p = line.trim().split("\\s+");
@@ -509,6 +632,12 @@ public final class GameScreen implements Screen {
             int aimIndex = p.length >= 10 ? 9 : 8;
             try { aimDeg = Float.parseFloat(p[aimIndex]); }
             catch (NumberFormatException e) { aimDeg = Float.NaN; }
+            if (p.length >= 14) {
+                arm0 = p[10];
+                arm1 = p[11];
+                arm2 = p[12];
+                arm3 = p[13];
+            }
         }
     }
 
@@ -568,27 +697,53 @@ public final class GameScreen implements Screen {
                 }
             }
             player.renderTrail(cameraRig.camera);
+        } else if (!intro && !matchEnded && networkRole == NetworkRole.CLIENT && bot != null && !bot.isDead() && !bot.isDying()) {
+            // Client mode: show aim indicator for 'bot' (the local guest)
+            // Use local calculation for immediate feedback (less lag)
+            // POTATO_GUN removed - only sword for multiplayer
+            float localAim = aimDegFromMouse(bot.position());
+            if (!Float.isNaN(localAim)) {
+                boolean attacking = bot.isAttacking() || Gdx.input.isButtonPressed(Input.Buttons.LEFT);
+                if (attacking) {
+                    aimCone.render(cameraRig.camera, bot.position().x, bot.position().z,
+                        localAim, 70f, 2.6f); // SWORD_HALF = 70f, SWORD_REACH = 2.6f
+                }
+            }
         }
 
         if (showDebug) debug.render(cameraRig.camera, player);
 
-        if (!player.isEliminated()) {
-            platePos.set(player.getPosition().x, player.getPosition().y + 2.45f, player.getPosition().z);
-            overhead.render(cameraRig.camera, platePos,
-                networkRole == NetworkRole.CLIENT ? "Host" : com.brawlgame.game.PlayerProfile.get().playerName,
-                player.getHealth(), player.getMaxHealth());
-        }
-        if (!bot.isDead() && !bot.isDying()) {
-            botPlatePos.set(bot.position().x, bot.position().y + 2.45f, bot.position().z);
-            overhead.renderSimple(cameraRig.camera, botPlatePos,
-                networkRole == NetworkRole.CLIENT ? "You" : (networkRole == NetworkRole.HOST ? "Guest" : "Rival"),
-                bot.health(), bot.maxHealth());
+        if (networkRole == NetworkRole.CLIENT) {
+            // Client: local player is bot (needs local HUD), host is player (needs overhead HUD)
+            if (!bot.isDead() && !bot.isDying()) {
+                overhead.renderLocal(com.brawlgame.game.PlayerProfile.get().playerName, bot.health(), bot.maxHealth());
+            }
+            if (!player.isEliminated()) {
+                platePos.set(player.getPosition().x, player.getPosition().y + 2.45f, player.getPosition().z);
+                overhead.renderSimple(cameraRig.camera, platePos, "Host", player.getHealth(), player.getMaxHealth());
+            }
+        } else {
+            // Singleplayer/Host: local player is player (needs local HUD), bot/rival is bot (needs overhead HUD)
+            if (!player.isEliminated()) {
+                overhead.renderLocal(com.brawlgame.game.PlayerProfile.get().playerName, player.getHealth(), player.getMaxHealth());
+            }
+            if (!bot.isDead() && !bot.isDying()) {
+                botPlatePos.set(bot.position().x, bot.position().y + 2.45f, bot.position().z);
+                overhead.renderSimple(cameraRig.camera, botPlatePos,
+                    networkRole == NetworkRole.HOST ? "Guest" : "Rival",
+                    bot.health(), bot.maxHealth());
+            }
         }
         overhead.renderLabel("Brawlers left: " + brawlersLeft);
         if (!intro && !matchEnded) match.renderTimer();
-        vignette.renderFlash(player.getHurtFraction());
-        vignette.render(player.getHurtFraction());
-        if (gas.isActive() && !player.isGodMode() && gas.inGas(player.getPosition().x, player.getPosition().z)) {
+        // Hurt vignette: use LOCAL player's hurt state (bot for CLIENT, player for HOST/SOLO).
+        float localHurtFrac = networkRole == NetworkRole.CLIENT ? bot.hurtFraction() : player.getHurtFraction();
+        vignette.renderFlash(localHurtFrac);
+        vignette.render(localHurtFrac);
+        // Gas vignette: check LOCAL player's position.
+        Vector3 localVigPos = networkRole == NetworkRole.CLIENT ? bot.position() : player.getPosition();
+        boolean localGodMode = networkRole != NetworkRole.CLIENT && player.isGodMode();
+        if (gas.isActive() && !localGodMode && gas.inGas(localVigPos.x, localVigPos.z)) {
             vignette.render(0.6f, 0.55f, 0.12f, 0.78f);
         }
 
@@ -634,8 +789,10 @@ public final class GameScreen implements Screen {
     @Override
     public void dispose() {
         if (modelBatch == null) return;
-        if (Gdx.input.getInputProcessor() != null) Gdx.input.setInputProcessor(null);
-        modelBatch.dispose();
+        try {
+            if (Gdx.input.getInputProcessor() != null) Gdx.input.setInputProcessor(null);
+            modelBatch.dispose();
+        } catch (Exception ignored) {}
         if (shadowBatch != null) shadowBatch.dispose();
         if (shadowLight != null) shadowLight.dispose();
         renderer.dispose();
@@ -664,5 +821,20 @@ public final class GameScreen implements Screen {
         skin.dispose();
         if (botSkin != null && botSkin != skin) botSkin.dispose();
         modelBatch = null;
+    }
+
+    private void setArmorSlot(Inventory inv, int slot, String itemName) {
+        if (inv == null) return;
+        if ("NONE".equals(itemName)) {
+            inv.set(Inventory.ARMOR_BASE + slot, null);
+        } else {
+            try {
+                ItemType type = ItemType.valueOf(itemName);
+                ItemStack current = inv.get(Inventory.ARMOR_BASE + slot);
+                if (current == null || current.type != type) {
+                    inv.set(Inventory.ARMOR_BASE + slot, new ItemStack(type));
+                }
+            } catch (Exception ignored) {}
+        }
     }
 }

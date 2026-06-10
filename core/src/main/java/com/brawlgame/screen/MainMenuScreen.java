@@ -9,11 +9,9 @@ import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
-import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
@@ -63,12 +61,6 @@ public final class MainMenuScreen implements Screen {
     private int showcaseIdx = -1;
     private Texture skinTex;
 
-    // Array-based animation (satisfies "animation that shows the use of arrays" rubric)
-    private Texture waterAnimTex;
-    private TextureRegion[] waterFrames;
-    private Animation<TextureRegion> waterAnimation;
-    private float animStateTime = 0f;
-
     // Button Y positions (computed once in render from current layout)
     private float spY, mpY, skY, opY, mmY, tmY;
     private float easyX, normalX, hardX, diffY;
@@ -110,15 +102,6 @@ public final class MainMenuScreen implements Screen {
         loadSkin();
         showcase = new CharacterShowcase();
         showcaseIdx = showcase.add(skinTex, null);
-
-        // Slice the water_still texture into an array of frames for our animated logo decoration
-        waterAnimTex = new Texture(Gdx.files.internal("textures/blocks/water_still.png"));
-        TextureRegion[][] grid = TextureRegion.split(waterAnimTex, 16, 16);
-        waterFrames = new TextureRegion[grid.length];
-        for (int i = 0; i < grid.length; i++) {
-            waterFrames[i] = grid[i][0];
-        }
-        waterAnimation = new Animation<>(0.08f, waterFrames);
     }
 
     private void loadSkin() {
@@ -133,7 +116,6 @@ public final class MainMenuScreen implements Screen {
 
     @Override
     public void render(float delta) {
-        animStateTime += delta;
         float W = uv.width(), H = uv.height();
 
         Gdx.gl.glClearColor(0.06f, 0.06f, 0.09f, 1f);
@@ -252,10 +234,6 @@ public final class MainMenuScreen implements Screen {
         fn.draw(bt, "MINECRAFT", BTN_CX - 192f + 3f, H - 42f);
         fn.setColor(GOLD);
         fn.draw(bt, "MINECRAFT", BTN_CX - 192f, H - 42f);
-
-        // Draw the array-based animation frame beside the title
-        TextureRegion currentFrame = waterAnimation.getKeyFrame(animStateTime, true);
-        bt.draw(currentFrame, BTN_CX + 80f, H - 90f, 64f, 64f);
 
         fn.getData().setScale(3.4f);
         fn.setColor(0f, 0f, 0f, 0.6f);
@@ -406,6 +384,5 @@ public final class MainMenuScreen implements Screen {
         fn.dispose();
         if (showcase != null) showcase.dispose();
         if (skinTex  != null) skinTex.dispose();
-        if (waterAnimTex != null) waterAnimTex.dispose();
     }
 }

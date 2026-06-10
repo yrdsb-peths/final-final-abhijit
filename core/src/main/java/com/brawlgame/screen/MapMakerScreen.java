@@ -163,6 +163,9 @@ public final class MapMakerScreen implements Screen {
     public void render(float delta) {
         if (modelBatch == null) return; // guard: hide() calls dispose() during screen transitions
         handleInput(delta);
+        // game.setScreen() inside handleInput calls hide()→dispose() synchronously.
+        // Re-check so we don't proceed to render with disposed objects.
+        if (modelBatch == null) return;
         renderer.rebuildIfDirty();
 
         // --- Shadow depth pass: render opaque casters from the sun's point of view. ---

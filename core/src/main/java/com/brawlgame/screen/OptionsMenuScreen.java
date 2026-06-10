@@ -3,6 +3,7 @@ package com.brawlgame.screen;
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
@@ -19,7 +20,7 @@ import com.brawlgame.ui.UiViewport;
  * Uses a {@link UiViewport} (1280×720 virtual canvas) so text stays readable at any resolution
  * including fullscreen. ESC / "Done" returns to the main menu.
  */
-public final class OptionsMenuScreen implements Screen {
+public final class OptionsMenuScreen implements Screen, InputProcessor {
 
     private final Game game;
     private final UiViewport uv  = new UiViewport();
@@ -34,6 +35,7 @@ public final class OptionsMenuScreen implements Screen {
     public void show() {
         op.reset();
         uv.resize(Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        Gdx.input.setInputProcessor(this);
     }
 
     @Override
@@ -66,13 +68,6 @@ public final class OptionsMenuScreen implements Screen {
         bt.end();
 
         Gdx.gl.glDisable(GL20.GL_BLEND);
-
-        if (Gdx.input.justTouched()) {
-            if (op.click(m.x, m.y)) { AudioManager.get().click(); game.setScreen(new MainMenuScreen(game)); }
-        }
-        if (Gdx.input.isTouched())  op.drag(m.x);
-        if (!Gdx.input.isTouched()) op.release();
-        if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE)) game.setScreen(new MainMenuScreen(game));
     }
 
     @Override
@@ -84,7 +79,7 @@ public final class OptionsMenuScreen implements Screen {
 
     @Override public void pause()  {}
     @Override public void resume() {}
-    @Override public void hide()   {}
+    @Override public void hide()   { Gdx.input.setInputProcessor(null); }
 
     @Override
     public void dispose() {
@@ -92,4 +87,44 @@ public final class OptionsMenuScreen implements Screen {
         bt.dispose();
         fn.dispose();
     }
+
+    // ---------------------------------------------------------------- input processor
+    @Override
+    public boolean keyDown(int keycode) {
+        if (op.keyDown(keycode)) return true;
+        if (keycode == Input.Keys.ESCAPE) {
+            game.setScreen(new MainMenuScreen(game));
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean touchDown(int screenX, int screenY, int pointer, int button) {
+        Vector2 m = uv.unproject(screenX, screenY);
+        if (op.click(m.x, m.y)) {
+            AudioManager.get().click();
+            game.setScreen(new MainMenuScreen(game));
+        }
+        return true;
+    }
+
+    @Override
+    public boolean touchDragged(int screenX, int screenY, int pointer) {
+        Vector2 m = uv.unproject(screenX, screenY);
+        op.drag(m.x);
+        return true;
+    }
+
+    @Override
+    public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+        op.release();
+        return true;
+    }
+
+    @Override public boolean keyUp(int keycode) { return false; }
+    @Override public boolean keyTyped(char character) { return false; }
+    @Override public boolean mouseMoved(int screenX, int screenY) { return false; }
+    @Override public boolean scrolled(float amountX, float amountY) { return false; }
+    @Override public boolean touchCancelled(int screenX, int screenY, int pointer, int button) { return false; }
 }

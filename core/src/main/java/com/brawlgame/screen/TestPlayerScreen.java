@@ -234,9 +234,8 @@ public final class TestPlayerScreen implements Screen {
         player.renderTrail(cameraRig.camera);
         if (showDebug) debug.render(cameraRig.camera, player);
 
-        // Raise the 3D projection point high above the model so the HUD clears the character.
-        platePos.set(player.getPosition().x, player.getPosition().y + 2.45f, player.getPosition().z);
-        overhead.render(cameraRig.camera, platePos, PlayerProfile.get().playerName,
+        // Fixed screen-space HUD for the local player.
+        overhead.renderLocal(PlayerProfile.get().playerName,
             player.getHealth(), player.getMaxHealth());
         vignette.render(player.getHurtFraction());
 

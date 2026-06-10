@@ -29,7 +29,7 @@ public final class AudioManager implements Disposable {
     private AudioManager() {
         grassSteps = loadMany("step/grass", 1, 6);
         click = loadSound("random/click.ogg");
-        swing = loadSound("random/bowhit1.ogg");
+        swing = loadSound("entity/player/attack/weak3.ogg");
         shoot = loadSound("item/crossbow/shoot1.ogg", "random/bow.ogg");
         hurt = loadSound("random/classic_hurt.ogg");
         gameOver = loadSound("entity/armorstand/break1.ogg", "random/break.ogg");
@@ -44,6 +44,12 @@ public final class AudioManager implements Disposable {
         if (menuMusic == null) return;
         menuMusic.setVolume(0.38f * volume());
         if (!menuMusic.isPlaying()) menuMusic.play();
+    }
+
+    public void syncVolume() {
+        if (menuMusic != null && menuMusic.isPlaying()) {
+            menuMusic.setVolume(0.38f * volume());
+        }
     }
 
     public void stopMenuMusic() {
@@ -105,7 +111,7 @@ public final class AudioManager implements Disposable {
     }
 
     private FileHandle resolve(String rel) {
-        String path = "Minecraft_Assets_Entire/minecraft/sounds/" + rel;
+        String path = "assets/sounds/" + rel;
         FileHandle f = Gdx.files.internal(path);
         if (f.exists()) return f;
         f = Gdx.files.local(path);

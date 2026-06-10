@@ -31,6 +31,7 @@ if (JavaVersion.current().isJava9Compatible()) {
 dependencies {
   implementation "com.badlogicgames.gdx:gdx-backend-lwjgl3:$gdxVersion"
   implementation "com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-desktop"
+  implementation "com.badlogicgames.gdx-video:gdx-video-lwjgl3:$gdxVideoVersion"
   implementation project(':core')
 
   if(enableGraalNative == 'true') {
@@ -168,9 +169,56 @@ construo {
   }
 }
 
-// Equivalent to the jar task; here for compatibility with gdx-setup.
+// Assembles a self-contained dist/ folder: fat JAR + platform launcher scripts.
+// Run:  ./gradlew lwjgl3:dist
 tasks.register('dist') {
   dependsOn 'jar'
+  group 'build'
+  description 'Builds the fat JAR and copies it with launcher scripts into dist/.'
+  doLast {
+    def distDir = rootProject.file('dist')
+    distDir.mkdirs()
+
+    // Copy the fat JAR
+    def jarFile = jar.archiveFile.get().asFile
+    copy {
+      from jarFile
+      into distDir
+    }
+
+    // Windows launcher
+    def bat = new File(distDir, 'Launch_Windows.bat')
+    bat.text = """\
+@echo off
+title BrawlGame Launcher
+java -version >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo Java not found. Install Java 11+ from https://adoptium.net
+    pause
+    exit /b 1
+)
+java -jar ${jarFile.name} %*
+if %ERRORLEVEL% NEQ 0 pause
+""".stripIndent()
+
+    // macOS / Linux launcher
+    def sh = new File(distDir, 'Launch_Mac.sh')
+    sh.text = """\
+#!/usr/bin/env bash
+DIR=\"\$(cd \"\$(dirname \"\$0\")\" && pwd)\"
+if ! command -v java &>/dev/null; then
+    echo \"Java not found. Install Java 11+ from https://adoptium.net\"
+    exit 1
+fi
+java -jar \"\$DIR/${jarFile.name}\" \"\$@\"
+""".stripIndent()
+    sh.setExecutable(true)
+
+    println "dist/ ready → ${distDir.absolutePath}"
+    println "  ${jarFile.name}  (${(jarFile.length() / 1_048_576).round(1)} MB)"
+    println "  Launch_Windows.bat"
+    println "  Launch_Mac.sh"
+  }
 }
 
 distributions {
