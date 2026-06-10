@@ -23,6 +23,7 @@ public final class AudioManager implements Disposable {
 
     private final Sound[] grassSteps;
     private final Sound click, swing, shoot, hurt, gameOver;
+    private Sound[] sweepSounds; // Merged from SoundManager - random sword hit sounds
     private Music menuMusic;
     private float stepTimer;
 
@@ -33,6 +34,8 @@ public final class AudioManager implements Disposable {
         shoot = loadSound("item/crossbow/shoot1.ogg", "random/bow.ogg");
         hurt = loadSound("random/classic_hurt.ogg");
         gameOver = loadSound("entity/armorstand/break1.ogg", "random/break.ogg");
+        // Load sweep sounds (merged from SoundManager)
+        sweepSounds = loadMany("entity/player/attack/sweep", 1, 3);
         menuMusic = loadMusic("music/menu/moog_city_2.ogg", "music/game/minecraft.ogg", "music/game/sweden.ogg");
         if (menuMusic != null) {
             menuMusic.setLooping(true);
@@ -61,6 +64,13 @@ public final class AudioManager implements Disposable {
     public void shoot() { play(shoot, 0.75f, 0.95f + MathUtils.random(0.12f)); }
     public void hurt() { play(hurt, 0.70f, 0.92f + MathUtils.random(0.12f)); }
     public void gameOver() { play(gameOver, 0.85f, 0.85f); }
+
+    /** Play a random sword hit sound on successful hit. */
+    public void playSwordHit() {
+        if (sweepSounds.length == 0) return;
+        Sound s = sweepSounds[MathUtils.random(sweepSounds.length - 1)];
+        if (s != null) s.play(volume());
+    }
 
     public void updateFootsteps(float delta, boolean moving, boolean sprinting, boolean onGround) {
         if (!moving || !onGround) {
@@ -129,6 +139,7 @@ public final class AudioManager implements Disposable {
         if (shoot != null) shoot.dispose();
         if (hurt != null) hurt.dispose();
         if (gameOver != null) gameOver.dispose();
+        for (Sound s : sweepSounds) if (s != null) s.dispose();
         if (menuMusic != null) menuMusic.dispose();
     }
 }

@@ -8,7 +8,6 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 
 import com.brawlgame.audio.AudioManager;
-import com.brawlgame.audio.SoundManager;
 import com.brawlgame.game.PlayerProfile;
 import com.brawlgame.ui.Settings.Action;
 
@@ -146,7 +145,6 @@ public final class OptionsPanel {
         if (draggingVol) {
             cfg.masterVolume = clamp01((mx - volR[0]) / volR[2]);
             AudioManager.get().syncVolume();
-            SoundManager.get().syncVolume();
         }
     }
 

@@ -1,7 +1,6 @@
 package com.brawlgame.combat;
 
 import com.badlogic.gdx.Gdx;
-import com.brawlgame.audio.SoundManager;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Camera;
 import com.badlogic.gdx.graphics.Color;
@@ -538,7 +537,7 @@ public final class WeaponController implements Disposable {
             reportDamage(dmg);
             anyHit = true;
             // Play sword hit sound on successful hit
-            SoundManager.get().playSwordHit();
+            AudioManager.get().playSwordHit();
         }
         return anyHit;
     }
@@ -578,8 +577,6 @@ public final class WeaponController implements Disposable {
         PotatoProjectile p = null;
         for (PotatoProjectile cand : potatoes) if (!cand.isAlive()) { p = cand; break; }
         if (p == null) return;
-        // Play gun sound on fire
-        SoundManager.get().playGun();
 
         // Muzzle = barrel-tip local point transformed by the live gun matrix.
         buildGunMatrix(gunMat);

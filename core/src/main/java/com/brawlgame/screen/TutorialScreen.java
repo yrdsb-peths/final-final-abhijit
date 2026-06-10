@@ -228,7 +228,7 @@ public final class TutorialScreen implements Screen {
         fn.getData().setScale(1.25f);
         fn.setColor(0.65f, 0.68f, 0.75f, 1f);
         // Display the card title as a small label below the graphic
-        String hint = card == 0 ? "Move your character around the arena"
+        String hint = card == 0 ? "Move your character"
                     : card == 1 ? "Attack enemies to deal damage"
                     :             "Manage your gear and loadout";
         gl.setText(fn, hint);
