@@ -9,9 +9,11 @@ import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
@@ -61,6 +63,12 @@ public final class MainMenuScreen implements Screen {
     private int showcaseIdx = -1;
     private Texture skinTex;
 
+    // Array-based animation: water tile sprite sheet sliced into TextureRegion[]
+    private Texture            waterAnimTex;
+    private TextureRegion[]    waterFrames;   // array of frames — satisfies "animation using arrays" rubric
+    private Animation<TextureRegion> waterAnimation;
+    private float              animStateTime = 0f;
+
     // Button Y positions (computed once in render from current layout)
     private float spY, mpY, skY, opY, mmY, tmY;
     private float easyX, normalX, hardX, diffY;
@@ -102,6 +110,13 @@ public final class MainMenuScreen implements Screen {
         loadSkin();
         showcase = new CharacterShowcase();
         showcaseIdx = showcase.add(skinTex, null);
+
+        // Slice the water_still sprite sheet into an array of 16x16 frames for the animated logo decoration
+        waterAnimTex = new Texture(Gdx.files.internal("textures/blocks/water_still.png"));
+        TextureRegion[][] grid = TextureRegion.split(waterAnimTex, 16, 16);
+        waterFrames = new TextureRegion[grid.length];
+        for (int i = 0; i < grid.length; i++) waterFrames[i] = grid[i][0];
+        waterAnimation = new Animation<>(0.08f, waterFrames);
     }
 
     private void loadSkin() {
@@ -225,6 +240,9 @@ public final class MainMenuScreen implements Screen {
 
         sh.end();
 
+        // ---- array animation ----
+        animStateTime += delta;
+
         // ---- text ----
         bt.begin();
 
@@ -240,6 +258,12 @@ public final class MainMenuScreen implements Screen {
         fn.draw(bt, "BRAWL", BTN_CX - 118f + 3f, H - 108f);
         fn.setColor(GREEN);
         fn.draw(bt, "BRAWL", BTN_CX - 118f, H - 108f);
+
+        // Animated water decoration beside the title (array-based TextureRegion[] animation)
+        if (waterAnimation != null) {
+            TextureRegion currentFrame = waterAnimation.getKeyFrame(animStateTime, true);
+            bt.draw(currentFrame, BTN_CX + 80f, H - 90f, 64f, 64f);
+        }
 
         // Stats panel
         PlayerProfile p = PlayerProfile.get();
@@ -382,7 +406,8 @@ public final class MainMenuScreen implements Screen {
         sh.dispose();
         bt.dispose();
         fn.dispose();
-        if (showcase != null) showcase.dispose();
-        if (skinTex  != null) skinTex.dispose();
+        if (showcase    != null) showcase.dispose();
+        if (skinTex     != null) skinTex.dispose();
+        if (waterAnimTex != null) waterAnimTex.dispose();
     }
 }
