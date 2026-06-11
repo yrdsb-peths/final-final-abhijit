@@ -14,7 +14,7 @@ Players spawn on opposite ends of a block-grid arena and try to eliminate each o
 - **Closing gas ring** — battle-royale shrink circle that deals damage over time
 - **AI rival** with pathfinding, three difficulty levels, and sword/gun attacks
 - **Local LAN multiplayer** — host or join a match over the same network
-- **Custom map maker** — unlocked through Developer Mode in Options
+- **Custom map maker** — built for development; see note below
 - **Skin selector** — swap your player skin from any `.png` in the `skins/` folder
 - **Session stats** — wins, losses, win rate, and per-match damage stats on the end screen
 
@@ -25,18 +25,24 @@ Players spawn on opposite ends of a block-grid arena and try to eliminate each o
 **Requirement:** Java 11 or higher.
 
 **Easiest way — double-click:**
-Run `STARTGAME.jar` directly if you have Java installed.
+Run `BrawlGame.jar` directly if you have Java installed.
 
 **From terminal:**
 ```bash
 # macOS / Linux
-./gradlew lwjgl3:run
+java -jar BrawlGame.jar
 
 # Windows
-gradlew.bat lwjgl3:run
+java -jar BrawlGame.jar
 ```
 
-On first launch a three-card tutorial walks you through movement, combat, and inventory. You can click through it quickly to reach the main menu.
+Or build from source:
+```bash
+./gradlew lwjgl3:run        # macOS / Linux
+gradlew.bat lwjgl3:run      # Windows
+```
+
+On first launch a three-card tutorial walks you through movement, combat, and inventory.
 
 ---
 
@@ -49,8 +55,6 @@ On first launch a three-card tutorial walks you through movement, combat, and in
 | Attack | Left Mouse Button |
 | Swap hotbar slot | 1 / 2 |
 | Pause | Escape |
-| God Mode (invincible + fly) | F3 |
-| Force-start gas ring | F4 |
 
 ---
 
@@ -66,13 +70,9 @@ The guest's camera is flipped 180° (they start on the north side facing south) 
 
 ---
 
-## Cheat / Debug Modes
+## Map Maker
 
-| Action | Effect |
-|---|---|
-| **F3** during a match | Toggle God Mode — invincible and can fly. Quick way to reach the end screen. |
-| **F4** during a match | Force-activate the gas ring immediately. |
-| **Options → Developer Mode ON** | Unlocks the Map Maker button on the main menu. |
+The map maker was used during development to build the built-in arenas. It is not accessible from the normal menu — enabling it requires renaming a configuration file in the file system. The built-in maps are the ones that ship with the game.
 
 ---
 
@@ -80,28 +80,30 @@ The guest's camera is flipped 180° (they start on the north side facing south) 
 
 The rubric requires *animation that shows the use of arrays*. Here is exactly where to find it, plus the other significant array usage in the project:
 
-### Primary — array-based animation (`MainMenuScreen.java`)
+### Primary — array-based animation (`SwooshTrail.java`)
 
-**File:** `core/src/main/java/com/brawlgame/screen/MainMenuScreen.java`
-**Lines:** ~65–70 (fields), ~102–109 (setup in `show()`), ~237–241 (draw in `render()`)
+**File:** `core/src/main/java/com/brawlgame/gfx/SwooshTrail.java`
+**Lines:** 36 (field), 46 (init), 62–78 (update), 86–133 (render)
 
-The main menu displays an animated water tile next to the title logo. It works like this:
+The sword swing trail is animated using a `Sample[] ring` array — a fixed-size ring buffer of blade tip/base positions recorded each frame during a swing:
 
-1. `water_still.png` (a vertical sprite sheet) is loaded as a `Texture`.
-2. `TextureRegion.split()` slices it into a `TextureRegion[]` array called `waterFrames` — each element is one frame.
-3. A `Animation<TextureRegion>` cycles through the array at 0.08 s per frame.
-4. Every `render()` call advances `animStateTime` and draws `waterAnimation.getKeyFrame(animStateTime, true)`.
+1. `Sample[] ring = new Sample[MAX_SAMPLES]` — fixed array of 14 sample slots, each holding a `tip` and `base` Vector3 and an age timer.
+2. Every frame during a swing, `addSample()` writes the current blade positions into the next slot: `ring[head] = ...`.
+3. `update(delta)` iterates the full array each frame, advancing each sample's age and marking expired ones unused.
+4. `render()` walks the array newest-to-oldest, builds a triangle-strip into a `float[] verts` array, and uploads it to the GPU — producing the glowing ribbon that trails behind the sword.
 
-That `TextureRegion[]` array is the direct array-animation the rubric is asking for.
+The ribbon fades sample-by-sample as entries age out of the array, giving the trail its head-to-tail dissolve.
 
 ### Other array usage in the project
 
 | File | Array | Purpose |
 |---|---|---|
+| `gfx/SwooshTrail.java` line 42 | `float[] verts` | Vertex buffer rebuilt from the ring each frame and uploaded to the GPU for rendering |
 | `ui/Hotbar.java` lines 31–32 | `Texture[] icons`, `String[] labels` | Hotbar slot icons and labels stored in parallel arrays, indexed by slot number and drawn in a loop |
 | `map/GameMap.java` line 45 | `BlockType[][] cells` | Entire map stored as a 2D `[col][row]` grid; collision, rendering, and saving all iterate over it |
 | `entity/AiBrawler.java` line 166 | `PotatoProjectile[] potatoes` | Fixed pool of projectiles for the AI rival's ranged attacks; the launcher scans the array for a dead slot to reuse |
 | `entity/ArmorRenderer.java` lines 72–74 | `Texture[]` per tier | Armor texture layers (diamond, iron, leather) stored as `Texture[]` arrays and iterated when rendering each armor piece |
+| `entity/BotPathfinder.java` lines 69–71 | `int[] dc`, `int[] dr`, `float[] cost` | Direction offset and movement cost arrays iterated each A* step to expand the eight neighbours of a cell |
 
 ---
 
@@ -114,7 +116,7 @@ That `TextureRegion[]` array is the direct array-animation the rubric is asking 
 | `assets/textures/` | Block and player textures |
 | `assets/sounds/` | Sound effects and music (vanilla Minecraft audio) |
 | `lwjgl3/` | Desktop launcher and build config |
-| `STARTGAME.jar` | Pre-built runnable jar |
+| `BrawlGame.jar` | Pre-built runnable jar — just needs Java 11+ |
 
 ---
 
@@ -126,7 +128,7 @@ I'm proud of building a fully **3D game from scratch** in Java using LibGDX — 
 
 ### What coding challenges did you overcome?
 
-The hardest challenge was **syncing the multiplayer game state**. Early on, positions would snap and jitter because we were just sending raw coordinates. We moved to a server-authoritative model: the host runs a physics simulation and broadcasts world state at 30 Hz via UDP, while each client predicts its own movement locally every frame. The opponent is smoothed with linear interpolation so they never teleport. The trickiest bug was figuring out that each client was applying the wrong server slot to itself — the mapping of "which slot is me vs. the opponent" was getting confused depending on connection order. We fixed it using KryoNet's real connection IDs so each side can always correctly identify its own data versus the enemy's, regardless of who connected first.
+The hardest challenge was **getting multiplayer to feel smooth**. My first attempt just sent each player's position over the network every frame, and it looked terrible — the opponent would stutter and snap whenever a packet arrived late or out of order. I had to rethink the whole approach: the host now runs the authoritative physics and broadcasts state at a fixed rate, while each client predicts its own movement locally so the game feels instant for you regardless of ping. The opponent is interpolated between received positions so they never teleport. The bug that took longest to track down was that each client was reading the wrong player's data from the server — it was assigning itself the opponent's slot depending on who connected first. Once I tied each client to its actual network connection ID, the mapping was always correct no matter the connection order.
 
 ---
 
