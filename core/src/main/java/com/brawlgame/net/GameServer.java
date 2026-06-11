@@ -60,6 +60,7 @@ public final class GameServer {
         Thread accept = new Thread(() -> {
             try {
                 clientSocket = serverSocket.accept();
+                clientSocket.setTcpNoDelay(true);
                 out = new PrintWriter(clientSocket.getOutputStream(), true);
                 in  = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 connected = true;

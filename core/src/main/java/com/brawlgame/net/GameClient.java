@@ -28,6 +28,7 @@ public final class GameClient {
     public boolean connect(String host, int port) {
         try {
             socket = new Socket(host, port);
+            socket.setTcpNoDelay(true);
             out = new PrintWriter(socket.getOutputStream(), true);
             in  = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             connected = true;

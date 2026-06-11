@@ -6,6 +6,7 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.glutils.HdpiUtils;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.VertexAttributes.Usage;
@@ -169,9 +170,9 @@ public final class PauseOverlay implements InputProcessor, Disposable {
     }
 
     private void renderModel(float rx, float ry, float rw, float rh, float w, float h) {
-        Gdx.gl.glViewport((int) rx, (int) ry, (int) rw, (int) rh);
+        HdpiUtils.glViewport((int) rx, (int) ry, (int) rw, (int) rh);
         Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST);
-        Gdx.gl.glScissor((int) rx, (int) ry, (int) rw, (int) rh);
+        HdpiUtils.glScissor((int) rx, (int) ry, (int) rw, (int) rh);
         Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT);
 
         // Frame the whole figure incl. the pedestal (−0.25 → armoured helmet top ~2.1) so nothing clips.
@@ -184,7 +185,7 @@ public final class PauseOverlay implements InputProcessor, Disposable {
         modelBatch.end();
 
         Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST);
-        Gdx.gl.glViewport(0, 0, (int) w, (int) h);
+        HdpiUtils.glViewport(0, 0, (int) w, (int) h);
     }
 
     // ---------------------------------------------------------------- input

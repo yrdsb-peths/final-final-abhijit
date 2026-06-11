@@ -6,6 +6,7 @@ import java.util.List;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.glutils.HdpiUtils;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g3d.Environment;
 import com.badlogic.gdx.graphics.g3d.Model;
@@ -77,9 +78,9 @@ public final class CharacterShowcase implements Disposable {
     int rx = (int) r[0], ry = (int) r[1], rw = (int) r[2], rh = (int) r[3];
     if (rw <= 2 || rh <= 2) return;
 
-    Gdx.gl.glViewport(rx, ry, rw, rh);
+    HdpiUtils.glViewport(rx, ry, rw, rh);
     Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST);
-    Gdx.gl.glScissor(rx, ry, rw, rh);
+    HdpiUtils.glScissor(rx, ry, rw, rh);
     Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT);
 
     PreviewCamera.frame(cam, rw, rh, 0f, 2.1f, 0.55f);
@@ -93,7 +94,7 @@ public final class CharacterShowcase implements Disposable {
     batch.end();
 
     Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST);
-    Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+    HdpiUtils.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
   }
 
   @Override

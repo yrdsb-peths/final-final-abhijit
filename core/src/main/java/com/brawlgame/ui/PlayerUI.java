@@ -8,6 +8,7 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.InputProcessor;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.glutils.HdpiUtils;
 import com.badlogic.gdx.graphics.PerspectiveCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
@@ -373,9 +374,9 @@ public final class PlayerUI implements InputProcessor, Disposable {
         float[] r = uiv.toScreen(vx, vy, vw, vh);
         int rx = (int) r[0], ry = (int) r[1], rw = (int) r[2], rh = (int) r[3];
         if (rw <= 0 || rh <= 0) return;
-        Gdx.gl.glViewport(rx, ry, rw, rh);
+        HdpiUtils.glViewport(rx, ry, rw, rh);
         Gdx.gl.glEnable(GL20.GL_SCISSOR_TEST);
-        Gdx.gl.glScissor(rx, ry, rw, rh);
+        HdpiUtils.glScissor(rx, ry, rw, rh);
         Gdx.gl.glClear(GL20.GL_DEPTH_BUFFER_BIT);
         // Frame the whole figure (feet at 0 → armoured helmet top ~2.1) so nothing is clipped.
         PreviewCamera.frame(previewCam, rw, rh, 0f, 2.1f, 0.55f);
@@ -385,7 +386,7 @@ public final class PlayerUI implements InputProcessor, Disposable {
         previewArmor.render(previewBatch, previewEnv, previewInstance);
         previewBatch.end();
         Gdx.gl.glDisable(GL20.GL_SCISSOR_TEST);
-        Gdx.gl.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        HdpiUtils.glViewport(0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
     }
 
     public void render() {
