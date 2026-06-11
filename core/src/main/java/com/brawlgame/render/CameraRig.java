@@ -48,14 +48,14 @@ public final class CameraRig {
     private float introT = -1f, introDur = 0f;
 
     public CameraRig() {
-        camera = new PerspectiveCamera(FOV_BASE, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        camera = new PerspectiveCamera(FOV_BASE, Gdx.graphics.getBackBufferWidth(), Gdx.graphics.getBackBufferHeight());
         camera.near = 0.1f;
         camera.far = 300f;
     }
 
     public void resize(int width, int height) {
-        camera.viewportWidth = width;
-        camera.viewportHeight = height;
+        camera.viewportWidth = Gdx.graphics.getBackBufferWidth();
+        camera.viewportHeight = Gdx.graphics.getBackBufferHeight();
         camera.update();
     }
 
