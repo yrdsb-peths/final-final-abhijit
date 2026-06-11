@@ -68,7 +68,7 @@ public final class WeaponController implements Disposable {
     private static final float ARM_PITCH_HI = 140f, ARM_PITCH_LO = 55f;
 
     // ---- melee hit resolution (reach in blocks, arc half-angle°) — damage is per-material (meleeBaseDamage) ----
-    private static final float SWORD_REACH = 2.6f, SWORD_HALF = 70f;
+    private static final float SWORD_REACH = 3.1f, SWORD_HALF = 70f;
     private static final float PUNCH_REACH = 1.8f, PUNCH_HALF = 25f;
     // Vanilla attack damage: fist 1; wood/gold 4, stone 5, iron 6, diamond 7. A descending mid-air
     // hit is a CRITICAL and deals 1.5× (see critReady).
@@ -509,7 +509,7 @@ public final class WeaponController implements Disposable {
         switch (swordVariant) {
             case STONE:   return 4f;
             case IRON:    return 5f;
-            case DIAMOND: return 6f;
+            case DIAMOND: return 8f;
             case WOOD:
             case GOLD:
             default:      return 3f;

@@ -76,7 +76,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
 
     private static final float GRAVITY = 22f, JUMP_V = 8.8f;
 
-    private static final float KB_SELF = 13.5f, KB_DAMP = 7f;        // knockback imparted TO this bot
+    private static final float KB_SELF = 18f, KB_DAMP = 7f;        // knockback imparted TO this bot
     private static final float KB_TO_PLAYER = 0.9f, KB_CRIT = 1.5f; // impulse strength onto the player
 
     private static final float RANGED_MIN = 3.8f, RANGED_MAX = 14f, RANGED_CD = 0.85f;
