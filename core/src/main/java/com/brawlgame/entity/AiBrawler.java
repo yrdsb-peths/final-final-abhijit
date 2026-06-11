@@ -101,7 +101,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
     private float speedScale = 1f;
 
     private State state = State.WANDER;
-    private float hurtTimer, flashTimer;
+    private float hurtTimer, flashTimer, stunTimer;
     private float attackTimer, lungeTimer, cooldownTimer, rangedCooldown;
     private float sprintJumpCooldown = 0f;
     private boolean attacking;
@@ -347,10 +347,14 @@ public final class AiBrawler implements CombatTarget, Disposable {
         pos.y += vy * delta;
         if (pos.y <= 0f) { pos.y = 0f; vy = 0f; onGround = true; } else onGround = false;
 
+        boolean stunned = stunTimer > 0f;
+        if (stunned) stunTimer = Math.max(0f, stunTimer - delta);
+
         Vector3 pp = player.getPosition();
         float dx = pp.x - pos.x, dz = pp.z - pos.z;
         float dist = (float) Math.sqrt(dx * dx + dz * dz);
 
+        if (!stunned) {
         if (attacking) {
             faceToward(dx, dz);
             airDrag(delta);
@@ -434,6 +438,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
             if (wanderTimer <= 0f) pickWander();
             setCombatSteer(wander.x - pos.x, wander.z - pos.z, WALK_SPEED);
         }
+        } // end !stunned
 
         integrate(delta);
         applyTransform();
@@ -950,6 +955,7 @@ public final class AiBrawler implements CombatTarget, Disposable {
         flashTimer = FLASH_DUR;
         tinted = false;
         knock.set(fromDir.x, 0f, fromDir.z).nor().scl(crit ? KB_SELF * 1.4f : KB_SELF);
+        stunTimer = 0.4f;
         hearts.burstHearts(chestTmp.set(pos.x, pos.y + 1.4f, pos.z), crit ? 14 : 5);
         if (health <= 0f) startDeath();
     }

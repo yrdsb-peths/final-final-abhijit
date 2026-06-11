@@ -703,7 +703,7 @@ public final class WeaponController implements Disposable {
 
     /** Seconds to refill one reload segment — significantly faster across the board. */
     public float reloadSecondsPerSegment() {
-        if (current == Weapon.GUN)  return 0.9f;
+        if (current == Weapon.GUN)  return 0.5f;
         if (current == Weapon.FIST) return 0.6f;
         switch (swordVariant) {
             case DIAMOND: return 0.7f;
