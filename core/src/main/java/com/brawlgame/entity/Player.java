@@ -75,6 +75,7 @@ public final class Player implements Disposable {
     private final Vector3 pos = new Vector3();
     private final Vector3 prevPos = new Vector3();
     private final Vector3 renderPos = new Vector3();
+    private final Vector3 targetNetPos = new Vector3();
     private float vx, vy, vz;
     private float knockVx, knockVz; // knockback that decays independently of WASD input
     private boolean onGround = true;
@@ -241,8 +242,9 @@ public final class Player implements Disposable {
     /** Apply an authoritative network snapshot with animation/equipment state for remote rendering. */
     public void setNetworkSnapshot(float x, float y, float z, float health, float facingDeg, boolean eliminated,
                                    boolean moving, boolean sprinting, int heldType, boolean attacking) {
-        pos.set(x, y, z);
-        if (renderPos.dst2(pos) > 16f) {
+        targetNetPos.set(x, y, z);
+        if (renderPos.dst2(targetNetPos) > 16f) {
+            pos.set(targetNetPos);
             renderPos.set(pos);
             prevPos.set(pos);
         }
@@ -267,6 +269,7 @@ public final class Player implements Disposable {
 
     /** Smoothly update animations and weapon VFX for remote player rendering on client. */
     public void updateRemoteClient(float delta) {
+        pos.lerp(targetNetPos, Math.min(1f, delta * 12f));
         renderPos.lerp(pos, Math.min(1f, delta * 20f));
         weapon.setAim(renderPos.x, renderPos.z, facingDeg);
         weapon.updatePose(delta, armPose);

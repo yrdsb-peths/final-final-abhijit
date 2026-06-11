@@ -125,6 +125,8 @@ public final class GameScreen implements Screen {
     private int showcasePlayer, showcaseRival;
     private boolean matchEnded;
     private final RemoteInput remoteInput = new RemoteInput();
+    private float netAccum = 0f;
+    private static final float NET_TICK = 1f / 20f;
 
     public GameScreen(Game game, GameMap map) {
         this(game, map, 1f, NetworkRole.SOLO, null, null);
@@ -399,10 +401,14 @@ public final class GameScreen implements Screen {
         boolean isMultiplayer = networkRole != NetworkRole.SOLO;
         boolean shouldUpdateWorld = !pause.isOpen() || isMultiplayer;
 
+        netAccum += d;
+        boolean netTick = netAccum >= NET_TICK;
+        if (netTick) netAccum -= NET_TICK;
+
         if (shouldUpdateWorld && !matchEnded) {
             if (networkRole == NetworkRole.CLIENT) {
                 pollClientState();
-                if (!intro) sendClientInput();
+                if (netTick && !intro) sendClientInput();
                 cameraRig.update(d, localCameraTarget(), false);
                 if (!intro) {
                     bot.updateClient(d, player, true);
@@ -450,7 +456,7 @@ public final class GameScreen implements Screen {
                         player.getPosition().x, player.getPosition().z, player.getFacingDeg()));
                 }
                 } // end !intro gameplay
-                if (networkRole == NetworkRole.HOST) sendServerState();
+                if (netTick && networkRole == NetworkRole.HOST) sendServerState();
             }
         }
         renderWorld(d, intro);
