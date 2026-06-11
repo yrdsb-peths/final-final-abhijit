@@ -348,7 +348,7 @@ public final class GameScreen implements Screen {
 
     /** Loads a skin texture that is visually distinct from the player's skin. */
     private Texture loadBotSkin(String playerSkinPath) {
-        com.badlogic.gdx.files.FileHandle dir = Gdx.files.local("skins");
+        com.badlogic.gdx.files.FileHandle dir = Gdx.files.local("assets/skins");
         if (dir.exists() && dir.isDirectory()) {
             java.util.List<com.badlogic.gdx.files.FileHandle> candidates = new java.util.ArrayList<>();
             for (com.badlogic.gdx.files.FileHandle f : dir.list(".png")) {

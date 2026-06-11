@@ -17,7 +17,7 @@ public class DungeonGame extends Game {
     @Override
     public void create() {
         // Ensure the local skins/ folder exists so SkinsScreen doesn't crash on a fresh install.
-        Gdx.files.local("skins").mkdirs();
+        Gdx.files.local("assets/skins").mkdirs();
 
         // Initialise persisted profile (lazy singleton, safe to call now that Gdx.app is ready).
         PlayerProfile profile = PlayerProfile.get();

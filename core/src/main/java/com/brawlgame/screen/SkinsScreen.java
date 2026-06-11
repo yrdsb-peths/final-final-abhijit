@@ -75,7 +75,7 @@ public final class SkinsScreen implements Screen {
         skins.add(def);
 
         // Scan local skins/ folder
-        FileHandle dir = Gdx.files.local("skins");
+        FileHandle dir = Gdx.files.local("assets/skins");
         if (dir.exists() && dir.isDirectory()) {
             for (FileHandle f : dir.list(".png")) {
                 SkinEntry e = new SkinEntry(f.nameWithoutExtension(), f.path());
